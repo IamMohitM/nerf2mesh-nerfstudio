@@ -3,10 +3,10 @@ name = "nerf2mesh"
 description = "Nerf2Mesh implementation for NeRFStudio"
 version = "0.1.0"
 
-dependencies = ["nerfstudio >= 0.3.0"] 
+dependencies = ["nerfstudio >= 0.3.0", "torch", "torchvision"] 
 
 [tool.setuptools.packages.find]
-include = ["method_template*"]
+include = ["nerf2mesh*"]
 
 # register the entry point of your new method here:
 # [project.entry-points.'nerfstudio.method_configs']
