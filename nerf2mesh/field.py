@@ -18,7 +18,7 @@ class Nerf2MeshField(Field):
         hidden_dim_sigma: int,
         num_levels: int,
         base_res: int,
-        max_res,
+        max_res: int,
         log2_hashmap_size,
         features_per_level,
         geom_init: bool = False,

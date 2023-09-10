@@ -9,13 +9,17 @@ from nerfstudio.data.dataparsers.instant_ngp_dataparser import (
     InstantNGPDataParserConfig,
 )
 from nerf2mesh.nerf2mesh import Nerf2MeshModelConfig
+from nerf2mesh.scheduler import Nerf2MeshSchedulerConfig
+
+
+max_num_iterations = 30000
 
 nerf2mesh = MethodSpecification(
     config=TrainerConfig(
         method_name="nerf2mesh",
         steps_per_eval_batch=500,
         steps_per_save=2000,
-        max_num_iterations=30000,
+        max_num_iterations=max_num_iterations,
         mixed_precision=True,
         pipeline=DynamicBatchPipelineConfig(
             datamanager=VanillaDataManagerConfig(
@@ -28,10 +32,10 @@ nerf2mesh = MethodSpecification(
         optimizers={
             "fields": {
                 "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
-                # TODO: add scheduler config from nerf2mesh
-                # "scheduler": ExponentialDecaySchedulerConfig(
-                #     lr_final=0.0001, max_steps=200000
-                # ),
+                # TODO: check max_num_iterations same as opt.iters in nerf2mesh
+                "scheduler": Nerf2MeshSchedulerConfig(
+                    max_steps=max_num_iterations
+                ),
             }
         },
         vis="viewer",
