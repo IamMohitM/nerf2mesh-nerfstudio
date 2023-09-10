@@ -1,3 +1,6 @@
 venv/
+outputs/
 
 *.egg-info/
+
+*.pyc
