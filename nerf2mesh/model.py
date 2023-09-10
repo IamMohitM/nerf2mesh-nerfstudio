@@ -68,6 +68,182 @@ class MLP(nn.Module):
                 else:
                     x = F.relu(x, inplace=True)
         return x
+    
+
+class NeRFRenderer(nn.Module):
+    def __init__(self, opt):
+        super().__init__()
+
+        self.opt = opt
+
+        # bound for ray marching (world space)
+        self.real_bound = opt.bound
+
+        # bound for grid querying
+        if self.opt.contract:
+            self.bound = 2
+        else:
+            self.bound = opt.bound
+
+        self.cascade = 1 + math.ceil(math.log2(self.bound))
+
+        self.grid_size = opt.grid_size
+        self.min_near = opt.min_near
+        self.density_thresh = opt.density_thresh
+
+        self.max_level = 16
+
+        # prepare aabb with a 6D tensor (xmin, ymin, zmin, xmax, ymax, zmax)
+        # NOTE: aabb (can be rectangular) is only used to generate points, we still rely on bound (always cubic) to calculate density grid and hashing.
+        aabb_train = torch.FloatTensor(
+            [
+                -self.real_bound,
+                -self.real_bound,
+                -self.real_bound,
+                self.real_bound,
+                self.real_bound,
+                self.real_bound,
+            ]
+        )
+        aabb_infer = aabb_train.clone()
+        self.register_buffer("aabb_train", aabb_train)
+        self.register_buffer("aabb_infer", aabb_infer)
+        
+
+        # individual codes
+        self.individual_num = opt.ind_num
+        self.individual_dim = opt.ind_dim
+
+        if self.individual_dim > 0:
+            self.individual_codes = nn.Parameter(
+                torch.randn(self.individual_num, self.individual_dim) * 0.1
+            )
+        else:
+            self.individual_codes = None
+
+        # extra state for cuda raymarching
+        self.cuda_ray = opt.cuda_ray
+        assert self.cuda_ray
+
+        # density grid
+        if not self.opt.trainable_density_grid:
+            density_grid = torch.zeros(
+                [self.cascade, self.grid_size**3]
+            )  # [CAS, H * H * H]
+            self.register_buffer("density_grid", density_grid)
+        else:
+            self.density_grid = nn.Parameter(
+                torch.zeros([self.cascade, self.grid_size**3])
+            )  # [CAS, H * H * H]
+        density_bitfield = torch.zeros(
+            self.cascade * self.grid_size**3 // 8, dtype=torch.uint8
+        )  # [CAS * H * H * H // 8]
+        self.register_buffer("density_bitfield", density_bitfield)
+        self.mean_density = 0
+        self.iter_density = 0
+
+        # for second phase training
+
+        if self.opt.stage == 1:
+            if self.opt.gui:
+                self.glctx = (
+                    dr.RasterizeCudaContext()
+                )  # support at most 2048 resolution.
+            else:
+                self.glctx = dr.RasterizeGLContext(
+                    output_db=False
+                )  # will crash if using GUI...
+
+            # sequentially load cascaded meshes
+            vertices = []
+            triangles = []
+            v_cumsum = [0]
+            f_cumsum = [0]
+            for cas in range(self.cascade):
+                _updated_mesh_path = (
+                    os.path.join(
+                        self.opt.workspace, "mesh_stage0", f"mesh_{cas}_updated.ply"
+                    )
+                    if self.opt.mesh == ""
+                    else self.opt.mesh
+                )
+                if os.path.exists(_updated_mesh_path) and self.opt.ckpt != "scratch":
+                    mesh = trimesh.load(
+                        _updated_mesh_path,
+                        force="mesh",
+                        skip_material=True,
+                        process=False,
+                    )
+                else:  # base (not updated)
+                    mesh = trimesh.load(
+                        os.path.join(
+                            self.opt.workspace, "mesh_stage0", f"mesh_{cas}.ply"
+                        ),
+                        force="mesh",
+                        skip_material=True,
+                        process=False,
+                    )
+                print(
+                    f"[INFO] loaded cascade {cas} mesh: {mesh.vertices.shape}, {mesh.faces.shape}"
+                )
+
+                vertices.append(mesh.vertices)
+                triangles.append(mesh.faces + v_cumsum[-1])
+
+                v_cumsum.append(v_cumsum[-1] + mesh.vertices.shape[0])
+                f_cumsum.append(f_cumsum[-1] + mesh.faces.shape[0])
+
+            vertices = np.concatenate(vertices, axis=0)
+            triangles = np.concatenate(triangles, axis=0)
+            self.v_cumsum = np.array(v_cumsum)
+            self.f_cumsum = np.array(f_cumsum)
+
+            # must put to cuda manually, we don't want these things in the model as buffers...
+            self.vertices = torch.from_numpy(vertices).float().cuda()  # [N, 3]
+            self.triangles = torch.from_numpy(triangles).int().cuda()
+
+            # learnable offsets for mesh vertex
+            self.vertices_offsets = nn.Parameter(torch.zeros_like(self.vertices))
+
+            # accumulate error for mesh face
+            self.triangles_errors = torch.zeros_like(
+                self.triangles[:, 0], dtype=torch.float32
+            ).cuda()
+            self.triangles_errors_cnt = torch.zeros_like(
+                self.triangles[:, 0], dtype=torch.float32
+            ).cuda()
+            self.triangles_errors_id = None
+
+        else:
+            self.glctx = None
+
+    def get_params(self, lr):
+        params = []
+
+        if self.individual_codes is not None:
+            params.append(
+                {
+                    "params": self.individual_codes,
+                    "lr": self.opt.lr * 0.1,
+                    "weight_decay": 0,
+                }
+            )
+
+        if self.opt.trainable_density_grid:
+            params.append(
+                {"params": self.density_grid, "lr": self.opt.lr, "weight_decay": 0}
+            )
+
+        if self.glctx is not None:
+            params.append(
+                {
+                    "params": self.vertices_offsets,
+                    "lr": self.opt.lr_vert,
+                    "weight_decay": 0,
+                }
+            )
+
+        return params
 
 
 class NeRFNetwork(NeRFRenderer):

@@ -33,15 +33,13 @@ class Nerf2MeshModelConfig(ModelConfig):
     base_resolution: int = 16
     desired_resolution: int = 2048
 
-
-
     min_near: float = 0.05
 
     density_threshold: int = 10
 
     # aabb_train: torch.Tensor # TODO: derived
+    #aabb_infer: torch.Tensor # TODO: derived
 
-    aabb_infer: torch.Tensor # TODO: derived
 
     individual_num : int = 500
     individual_dim: int = 0
@@ -97,7 +95,8 @@ class Nerf2MeshModel(Model):
         )
 
         self.sampler = VolumetricSampler(
-            occupancy_grid=self.occupancy_grid,)
+            occupancy_grid=self.occupancy_grid,
+            density_fn=self.field.density_fn)
 
         # return super().populate_modules()
 
