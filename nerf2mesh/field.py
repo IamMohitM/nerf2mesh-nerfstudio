@@ -14,8 +14,9 @@ class Nerf2MeshField(Field):
     def __init__(
         self,
         num_layers_sigma: int,
-        num_layers_color: int,
+        specular_dim: int,
         hidden_dim_sigma: int,
+        hidden_dim_color: int,
         num_levels: int,
         base_res: int,
         max_res: int,
@@ -26,7 +27,7 @@ class Nerf2MeshField(Field):
     ) -> None:
         super().__init__()
 
-        self.mlp_base_grid = HashEncoding(
+        self.encoder = HashEncoding(
             num_levels=num_levels,
             min_res=base_res,
             max_res=max_res,
@@ -36,15 +37,27 @@ class Nerf2MeshField(Field):
         )
 
         in_activation = torch.nn.Softplus if geom_init else torch.nn.ReLU
-        self.sigma_net = MLP(
-            in_dim=self.mlp_base_grid.get_out_dim(),
-            out_dim=1,
-            num_layers=num_layers_sigma,
-            layer_width=hidden_dim_sigma,
-            activation=in_activation,
-            out_activation=None,
+        self.sigma_net= MLP(
+                in_dim=3 + self.encoder.get_out_dim(),
+                out_dim=1,
+                num_layers=num_layers_sigma,
+                layer_width=hidden_dim_sigma,
+                activation=in_activation,
+                out_activation=None,
+            )
+        
+        self.encoder_color = HashEncoding(
+            num_levels=num_levels,
+            min_res=base_res,
+            max_res=max_res,
+            log2_hashmap_size=log2_hashmap_size,
+            features_per_level=features_per_level,
+            implementation=implementation,
         )
-        self.color_net = ...
+
+        self.color_net = MLP(in_dim = 3 + self.encoder_color.get_out_dim(), num_layers = 3 + specular_dim, layer_width = hidden_dim_color, out_dim = 3)
+
+        self.specular_net = MLP(in_dim = specular_dim + 3, num_layers = 2, layer_width = 32, out_dim = 3)
 
     def get_density(self, ray_samples: RaySamples) -> Tuple[Tensor, Optional[Tensor]]:
         # TODO: check preprocessing if spatial encoding is needed or positions are within the scenebox

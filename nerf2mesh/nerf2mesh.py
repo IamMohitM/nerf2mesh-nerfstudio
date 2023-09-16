@@ -24,7 +24,8 @@ class Nerf2MeshModelConfig(ModelConfig):
     # bound: float = 1.0 #TODO derived
 
     # cascade: float TODO: add cascade in model def derived
-
+    hidden_dim_sigma: int = 32
+    hidden_dim_color: int = 64
     # TODO: check if grid_resolution and desired_resolution are the same
     # understand each parameter related to grid
     grid_resolution: int = 128  # same as grid resolution or grid size
@@ -41,6 +42,7 @@ class Nerf2MeshModelConfig(ModelConfig):
 
     individual_num: int = 500
     individual_dim: int = 0
+    specular_dim: int = 0
 
     # individual_codes # TODO: derived
 
@@ -54,6 +56,8 @@ class Nerf2MeshModelConfig(ModelConfig):
 
     mean_density: float = 0.0
     iter_density: float = 0.0
+
+    sigma_layers = 2
 
     # TODO: register_buffer
 
@@ -89,7 +93,18 @@ class Nerf2MeshModel(Model):
             self.scene_box.aabb.flatten(), requires_grad=False
         )
 
+        
+
         self.field = Nerf2MeshField(
+            num_layers_sigma=self.config.sigma_layers,
+            specular_dim=self.config.specular_dim,
+            hidden_dim_sigma=self.config.hidden_dim_sigma,  
+            hidden_dim_color=self.config.hidden_dim_color,  
+            num_levels=self.config.grid_levels,
+            base_res=self.config.base_resolution,
+            max_res=self.config.grid_resolution,
+            log2_hashmap_size=self.config.grid_levels,
+            features_per_level=self.config.grid_resolution,
         )
 
         self.occupancy_grid = nerfacc.OccGridEstimator(
