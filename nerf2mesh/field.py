@@ -1,7 +1,7 @@
 from typing import Dict, Optional
 from nerfstudio.cameras.rays import RaySamples
 from nerfstudio.field_components.field_heads import FieldHeadNames
-from nerfstudio.fields.base_field import Field, FieldConfig
+from nerfstudio.fields.base_field import Field
 from torch import Tensor
 from typing import Tuple
 from nerfstudio.field_components.encodings import HashEncoding

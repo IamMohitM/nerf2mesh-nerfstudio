@@ -121,4 +121,48 @@ class Nerf2MeshModel(Model):
         self.loss = torch.nn.MSELoss(reduction="none")
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
+
+        params = []
+
+        # if self.individual_codes is not None:
+        #     params.append(
+        #         {
+        #             "params": self.individual_codes,
+        #             "lr": self.opt.lr * 0.1,
+        #             "weight_decay": 0,
+        #         }
+        #     )
+
+        # if self.opt.trainable_density_grid:
+        #     params.append(
+        #         {"params": self.density_grid, "lr": self.opt.lr, "weight_decay": 0}
+        #     )
+
+        # if self.glctx is not None:  
+        #     params.append(
+        #         {
+        #             "params": self.vertices_offsets,
+        #             "lr": self.opt.lr_vert,
+        #             "weight_decay": 0,
+        #         }
+        #     )
+
+        lr = 0.01
+
+        #TODO: add other param groups from NerfRenderer
+        
+        params.extend([
+            {'params': self.field.encoder.parameters(), 'lr': lr},
+            {'params': self.field.encoder_color.parameters(), 'lr': lr},
+            {'params': self.field.sigma_net.parameters(), 'lr': lr},
+            {'params': self.field.color_net.parameters(), 'lr': lr}, 
+            {'params': self.field.specular_net.parameters(), 'lr': lr}, 
+        ])
+
+        # if self.opt.sdf:
+        #     params.append({'params': self.variance, 'lr': lr * 0.1})
+
+
+        return params
+
         ...
