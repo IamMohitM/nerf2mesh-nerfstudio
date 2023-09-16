@@ -21,7 +21,7 @@ class Nerf2MeshField(Field):
         base_res: int,
         max_res: int,
         log2_hashmap_size,
-        features_per_level,
+        features_per_level:int = 2,
         geom_init: bool = False,
         implementation: str = "tcnn",
     ) -> None:

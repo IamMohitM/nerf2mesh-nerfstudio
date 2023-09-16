@@ -32,6 +32,7 @@ class Nerf2MeshModelConfig(ModelConfig):
     grid_levels: int = 16
     base_resolution: int = 16
     desired_resolution: int = 2048
+    
 
     min_near: float = 0.05
 
@@ -103,8 +104,7 @@ class Nerf2MeshModel(Model):
             num_levels=self.config.grid_levels,
             base_res=self.config.base_resolution,
             max_res=self.config.grid_resolution,
-            log2_hashmap_size=self.config.grid_levels,
-            features_per_level=self.config.grid_resolution,
+            log2_hashmap_size=self.config.grid_levels
         )
 
         self.occupancy_grid = nerfacc.OccGridEstimator(
