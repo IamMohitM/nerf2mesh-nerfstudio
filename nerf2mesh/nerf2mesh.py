@@ -1,9 +1,10 @@
 import math
+from nerfstudio.cameras.rays import RayBundle
 
 import torch
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Type, Optional
+from typing import Dict, List, Type, Optional, Tuple
 
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.model_components.ray_samplers import VolumetricSampler
@@ -32,7 +33,6 @@ class Nerf2MeshModelConfig(ModelConfig):
     grid_levels: int = 16
     base_resolution: int = 16
     desired_resolution: int = 2048
-    
 
     min_near: float = 0.05
 
@@ -50,6 +50,7 @@ class Nerf2MeshModelConfig(ModelConfig):
     cuda_ray: bool = True
 
     trainable_density_grid: bool = True
+    log2hash_map_size: int = 19
 
     # density_grid #TODO: derived
 
@@ -94,17 +95,15 @@ class Nerf2MeshModel(Model):
             self.scene_box.aabb.flatten(), requires_grad=False
         )
 
-        
-
         self.field = Nerf2MeshField(
             num_layers_sigma=self.config.sigma_layers,
             specular_dim=self.config.specular_dim,
-            hidden_dim_sigma=self.config.hidden_dim_sigma,  
-            hidden_dim_color=self.config.hidden_dim_color,  
+            hidden_dim_sigma=self.config.hidden_dim_sigma,
+            hidden_dim_color=self.config.hidden_dim_color,
             num_levels=self.config.grid_levels,
             base_res=self.config.base_resolution,
             max_res=self.config.grid_resolution,
-            log2_hashmap_size=self.config.grid_levels
+            log2_hashmap_size=self.config.log2hash_map_size,
         )
 
         self.occupancy_grid = nerfacc.OccGridEstimator(
@@ -121,7 +120,6 @@ class Nerf2MeshModel(Model):
         self.loss = torch.nn.MSELoss(reduction="none")
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
-
         params = []
 
         # if self.individual_codes is not None:
@@ -138,7 +136,7 @@ class Nerf2MeshModel(Model):
         #         {"params": self.density_grid, "lr": self.opt.lr, "weight_decay": 0}
         #     )
 
-        # if self.glctx is not None:  
+        # if self.glctx is not None:
         #     params.append(
         #         {
         #             "params": self.vertices_offsets,
@@ -149,20 +147,40 @@ class Nerf2MeshModel(Model):
 
         lr = 0.01
 
-        #TODO: add other param groups from NerfRenderer
-        
-        params.extend([
-            {'params': self.field.encoder.parameters(), 'lr': lr},
-            {'params': self.field.encoder_color.parameters(), 'lr': lr},
-            {'params': self.field.sigma_net.parameters(), 'lr': lr},
-            {'params': self.field.color_net.parameters(), 'lr': lr}, 
-            {'params': self.field.specular_net.parameters(), 'lr': lr}, 
-        ])
+        # TODO: add other param groups from NerfRenderer
+
+        return {"fields": list(self.field.parameters())}
+
+        params.extend(
+            [
+                {"params": self.field.encoder.parameters(), "lr": lr},
+                {"params": self.field.encoder_color.parameters(), "lr": lr},
+                {"params": self.field.sigma_net.parameters(), "lr": lr},
+                {"params": self.field.color_net.parameters(), "lr": lr},
+                {"params": self.field.specular_net.parameters(), "lr": lr},
+            ]
+        )
 
         # if self.opt.sdf:
         #     params.append({'params': self.variance, 'lr': lr * 0.1})
 
-
         return params
 
         ...
+
+    def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor | List]:
+        ...
+        # return super().get_outputs(ray_bundle)
+
+    def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
+        ...
+        # return super().get_metrics_dict(outputs, batch)
+
+    def get_loss_dict(self, outputs, batch, metrics_dict=None):
+        ...
+
+    def get_image_metrics_and_images(
+        self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
+    ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
+        ...
+        """Returns a dictionary of images and metrics to plot. Here you can apply your colormaps."""
