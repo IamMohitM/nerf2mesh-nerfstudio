@@ -18,7 +18,7 @@ class Nerf2MeshScheduler(Scheduler):
     def get_scheduler(self, optimizer: Optimizer, lr_init: float) -> LRScheduler:
         return LambdaLR(
             optimizer,
-            lr_lambda=lambda iter: 0.01 + 0.99 * (iter / 500)
+            lr_lambda=lambda iter: lr_init + 0.99 * (iter / 500)
             if iter <= 500
             else 0.1 ** ((iter - 500) / (self.config.max_steps - 500)), #TODO: The self.config.max_steps should be checked
         )

@@ -30,11 +30,23 @@ class Nerf2MeshModelConfig(ModelConfig):
     # TODO: check if grid_resolution and desired_resolution are the same
     # understand each parameter related to grid
     grid_resolution: int = 128  # same as grid resolution or grid size
-    grid_levels: int = 16
-    base_resolution: int = 16
-    desired_resolution: int = 2048
+    grid_levels: int = 16 #differnet resolution levels
+    base_resolution: int = 16 #starting resolution
+    desired_resolution: int = 2048 #ending resolution
 
-    min_near: float = 0.05
+    ## -- Sammpling Parameters
+    min_near: float = 0.05 #same as opt.min_near (nerf2mesh)
+    min_far: float = 1000 # infinite - same as opt.min_far (nerf2mesh)
+
+    #following parameters copied from instant-ngp nerfstudio
+    alpha_thre: float = 0.01
+    """Threshold for opacity skipping."""
+    cone_angle: float = 0.004
+    """Should be set to 0.0 for blender scenes but 1./256 for real scenes."""
+    render_step_size: Optional[float] = None
+    """Minimum step size for rendering."""
+
+    ## ----------------------
 
     density_threshold: int = 10
 
@@ -69,7 +81,6 @@ class Nerf2MeshModelConfig(ModelConfig):
     # TODO: config for stage 1 if needed
 
 
-@dataclass
 class Nerf2MeshModel(Model):
     config: Nerf2MeshModelConfig
     field: Nerf2MeshField
@@ -95,7 +106,9 @@ class Nerf2MeshModel(Model):
             self.scene_box.aabb.flatten(), requires_grad=False
         )
 
+        #TODO: add remaining parameters 
         self.field = Nerf2MeshField(
+            aabb=self.scene_box.aabb,
             num_layers_sigma=self.config.sigma_layers,
             specular_dim=self.config.specular_dim,
             hidden_dim_sigma=self.config.hidden_dim_sigma,
@@ -105,6 +118,10 @@ class Nerf2MeshModel(Model):
             max_res=self.config.grid_resolution,
             log2_hashmap_size=self.config.log2hash_map_size,
         )
+
+        if self.config.render_step_size is None:
+            # auto step size: ~1000 samples in the base level grid
+            self.config.render_step_size = ((self.scene_aabb[3:] - self.scene_aabb[:3]) ** 2).sum().sqrt().item() / 1000
 
         self.occupancy_grid = nerfacc.OccGridEstimator(
             roi_aabb=self.scene_aabb,
@@ -169,10 +186,27 @@ class Nerf2MeshModel(Model):
         ...
 
     def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor | List]:
+
+        assert self.field is not None
+        num_rays = len(ray_bundle)
+
+        with torch.no_grad():
+            ray_samples, ray_indices = self.sampler(
+                ray_bundle=ray_bundle,
+                near_plane=self.config.min_near,
+                far_plane=self.config.min_far,
+                render_step_size=self.config.render_step_size,
+                alpha_thre=self.config.alpha_thre,
+                cone_angle=self.config.cone_angle,
+            )
+
+        field_outputs = self.field(ray_samples)
+
         ...
         # return super().get_outputs(ray_bundle)
 
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
+        
         ...
         # return super().get_metrics_dict(outputs, batch)
 

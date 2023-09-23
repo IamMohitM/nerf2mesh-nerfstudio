@@ -13,6 +13,7 @@ from nerfstudio.data.scene_box import SceneBox
 class Nerf2MeshField(Field):
     def __init__(
         self,
+        aabb: torch.Tensor,
         num_layers_sigma: int,
         specular_dim: int,
         hidden_dim_sigma: int,
@@ -26,6 +27,8 @@ class Nerf2MeshField(Field):
         implementation: str = "tcnn",
     ) -> None:
         super().__init__()
+
+        self.register_buffer("aabb", aabb)  
 
         self.encoder = HashEncoding(
             num_levels=num_levels,
@@ -64,13 +67,14 @@ class Nerf2MeshField(Field):
         # positions = ray_samples.frustums.get_positions()
         # selector = ((positions > 0.0) & (positions < 1.0)).all(dim=-1)
         # positions = positions * selector[..., None]
+
         positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
-        h = self.mlp_base_grid(positions)
+        h = self.encoder(positions)
         h = torch.cat([positions, h], dim=-1)
         h = self.sigma_net(h)
         #TODO: add trunc exp and density before activation
         
-        density = trunc_exp(density_before_activation.to(positions))
+        density = trunc_exp(positions[..., 0])
         return density
 
         # return self.sigma_net(*args)
