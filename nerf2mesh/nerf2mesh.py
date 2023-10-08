@@ -8,6 +8,11 @@ from typing import Dict, List, Type, Optional, Tuple
 
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.model_components.ray_samplers import VolumetricSampler
+from nerfstudio.engine.callbacks import (
+    TrainingCallback,
+    TrainingCallbackAttributes,
+    TrainingCallbackLocation,
+)
 from torch.nn import Parameter
 from nerf2mesh.field import Nerf2MeshField
 import nerfacc
@@ -29,16 +34,22 @@ class Nerf2MeshModelConfig(ModelConfig):
     hidden_dim_color: int = 64
     # TODO: check if grid_resolution and desired_resolution are the same
     # understand each parameter related to grid
+    # occupancy grid
     grid_resolution: int = 128  # same as grid resolution or grid size
-    grid_levels: int = 16 #differnet resolution levels
-    base_resolution: int = 16 #starting resolution
-    desired_resolution: int = 2048 #ending resolution
+    grid_levels: int = 4  # differnet resolution levels for occupancy grid - this is for efficiency (paper appendix) not the encodng levels
+
+    num_levels_sigma_encoder: int = 16
+    num_levels_color_encoder: int = 16
+    n_features_per_level_sigma_encoder: int = 2
+    n_features_per_level_color_encoder: int = 2
+    base_resolution: int = 16  # starting resolution
+    desired_resolution: int = 2048  # ending resolution
 
     ## -- Sammpling Parameters
-    min_near: float = 0.05 #same as opt.min_near (nerf2mesh)
-    min_far: float = 1000 # infinite - same as opt.min_far (nerf2mesh)
+    min_near: float = 0.05  # same as opt.min_near (nerf2mesh)
+    min_far: float = 1000  # infinite - same as opt.min_far (nerf2mesh)
 
-    #following parameters copied from instant-ngp nerfstudio
+    # following parameters copied from instant-ngp nerfstudio
     alpha_thre: float = 0.01
     """Threshold for opacity skipping."""
     cone_angle: float = 0.004
@@ -55,7 +66,7 @@ class Nerf2MeshModelConfig(ModelConfig):
 
     individual_num: int = 500
     individual_dim: int = 0
-    specular_dim: int = 0
+    specular_dim: int = 3 # fs input features for specular net
 
     # individual_codes # TODO: derived
 
@@ -106,13 +117,17 @@ class Nerf2MeshModel(Model):
             self.scene_box.aabb.flatten(), requires_grad=False
         )
 
-        #TODO: add remaining parameters 
+        # TODO: add remaining parameters
         self.field = Nerf2MeshField(
             aabb=self.scene_box.aabb,
             num_layers_sigma=self.config.sigma_layers,
             specular_dim=self.config.specular_dim,
             hidden_dim_sigma=self.config.hidden_dim_sigma,
             hidden_dim_color=self.config.hidden_dim_color,
+            num_levels_sigma_encoder = self.config.num_levels_sigma_encoder,
+            num_levels_color_encoder = self.config.num_levels_color_encoder,
+            n_features_per_level_sigma_encoder = self.config.n_features_per_level_sigma_encoder,
+            n_features_per_level_color_encoder = self.config.n_features_per_level_color_encoder,
             num_levels=self.config.grid_levels,
             base_res=self.config.base_resolution,
             max_res=self.config.grid_resolution,
@@ -121,8 +136,12 @@ class Nerf2MeshModel(Model):
 
         if self.config.render_step_size is None:
             # auto step size: ~1000 samples in the base level grid
-            self.config.render_step_size = ((self.scene_aabb[3:] - self.scene_aabb[:3]) ** 2).sum().sqrt().item() / 1000
+            self.config.render_step_size = (
+                (self.scene_aabb[3:] - self.scene_aabb[:3]) ** 2
+            ).sum().sqrt().item() / 1000
 
+        # TODO: check if occgrid is used in nerf2mesh
+        # TODO: check if occgrid is same as self.opt.trainable_density_grid in nerf2mesh
         self.occupancy_grid = nerfacc.OccGridEstimator(
             roi_aabb=self.scene_aabb,
             resolution=self.config.grid_resolution,
@@ -135,6 +154,24 @@ class Nerf2MeshModel(Model):
 
         # Criterian in nerf2mesh
         self.loss = torch.nn.MSELoss(reduction="none")
+
+    def get_training_callbacks(
+        self, training_callback_attributes: TrainingCallbackAttributes
+    ) -> List[TrainingCallback]:
+        def update_occupancy_grid(step: int):
+            self.occupancy_grid.update_every_n_steps(
+                step=step,
+                occ_eval_fn=lambda x: self.field.density_fn(x)
+                * self.config.render_step_size,
+            )
+
+        return [
+            TrainingCallback(
+                where_to_run=[TrainingCallbackLocation.BEFORE_TRAIN_ITERATION],
+                update_every_num_iters=1,
+                func=update_occupancy_grid,
+            ),
+        ]
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         params = []
@@ -186,7 +223,6 @@ class Nerf2MeshModel(Model):
         ...
 
     def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor | List]:
-
         assert self.field is not None
         num_rays = len(ray_bundle)
 
@@ -202,11 +238,20 @@ class Nerf2MeshModel(Model):
 
         field_outputs = self.field(ray_samples)
 
+        return field_outputs
+
         ...
         # return super().get_outputs(ray_bundle)
 
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
-        
+        # print(outputs)
+        #copied from instant ngp
+        # image = batch["image"].to(self.device)
+        # image = self.renderer_rgb.blend_background(image)
+        # metrics_dict = {}
+        # metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
+        # metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
+        # return metrics_dict
         ...
         # return super().get_metrics_dict(outputs, batch)
 

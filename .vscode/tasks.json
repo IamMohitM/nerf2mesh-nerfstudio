@@ -4,7 +4,6 @@
         {
             "label": "Test Nerf2Mesh",
             "type": "shell",
-            
             "command": "source venv/bin/activate && ns-train nerf2mesh instant-ngp-data --data ~/datasets/nerf_synthetic_small/nerf_synthetic/chair/transforms_train.json",
             "options": {
                 "env": {
@@ -13,7 +12,8 @@
             },
             "group": {
                 "isDefault": true
-            }
+            },
+            "problemMatcher": []
         }
     ]
 }
