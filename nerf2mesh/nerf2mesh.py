@@ -92,6 +92,10 @@ class Nerf2MeshModelConfig(ModelConfig):
 
     background_color: Literal["random", "black", "white"] = "random"
 
+    lambda_mask: float = 0.1
+    lambda_rgb: float = 1.0
+    lambda_depth: float = 0.1
+
     # TODO: register_buffer
 
     # NOTE: all default configs are passed to nerf2mesh field
@@ -294,23 +298,32 @@ class Nerf2MeshModel(Model):
         # copied from instant ngp
         # image = batch["image"].to(self.device)
         # image = self.renderer_rgb.blend_background(image)
+        image = batch["image"].to(self.device)
+        image = self.renderer_rgb.blend_background(image)
         # TODO: add psnr
         # metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
         metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
         return metrics_dict
-        # return super().get_metrics_dict(outputs, batch)z``
 
     # almost same as ngp model until rgb_loss
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
-        image = batch["image"][..., :3].to(self.device)
+        image = batch['image'][..., :3].to(self.device)
+        image = self.renderer_rgb.blend_background(image)
+
         pred_rgb, image = self.renderer_rgb.blend_background_for_loss_computation(
             pred_image=outputs["rgb"],
             pred_accumulation=outputs["accumulation"],
             gt_image=image,
         )
-        loss = self.loss(image, pred_rgb).mean(-1)
 
-        #TODO: add different losses - lambda_mask, lambda_rgb
+        loss = self.loss(pred_rgb, image).mean(-1)
+
+        if self.config.lambda_mask > 0 and batch['image'].size(-1) > 3:
+            gt_mask = batch['image'][..., 3:].to(self.device)
+            pred_mask = outputs['accumulation']
+            loss = loss + self.config.lambda_mask * self.loss(pred_mask.squeeze(1), gt_mask.squeeze(1))
+
+        # TODO: add different losses - lambda_mask, lambda_rgb
         loss_dict = {"rgb_loss": loss.mean()}
         return loss_dict
 
