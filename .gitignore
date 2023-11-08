@@ -1,5 +1,7 @@
 venv/
 outputs/
+__pycache__/
+build/
 
 *.egg-info/
 
