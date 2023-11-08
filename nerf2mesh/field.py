@@ -148,15 +148,6 @@ class Nerf2MeshField(Field):
         color = (specular_feat + diffuse).clamp(0, 1)
 
         outputs[FieldHeadNames.RGB] = color.view_as(directions)
+        outputs["num_samples_per_batch"] = positions.shape[0]
         # outputs[FieldHeadNames.]
         return outputs
-
-    def forward(
-        self, ray_samples: RaySamples, compute_normals: bool = False
-    ) -> Dict[FieldHeadNames, Tensor]:
-        super().forward(ray_samples, compute_normals)
-        # density = self.get_density(ray_samples)
-
-        # field_outputs = self.get_outputs(ray_samples, density_embedding=None)
-
-    ...

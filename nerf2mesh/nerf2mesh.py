@@ -4,10 +4,16 @@ from nerfstudio.cameras.rays import RayBundle
 import torch
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Type, Optional, Tuple
+from typing import Dict, List, Type, Optional, Tuple, Literal
 
+from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.model_components.ray_samplers import VolumetricSampler
+from nerfstudio.model_components.renderers import (
+    RGBRenderer,
+    AccumulationRenderer,
+    DepthRenderer,
+)
 from nerfstudio.engine.callbacks import (
     TrainingCallback,
     TrainingCallbackAttributes,
@@ -66,7 +72,7 @@ class Nerf2MeshModelConfig(ModelConfig):
 
     individual_num: int = 500
     individual_dim: int = 0
-    specular_dim: int = 3 # fs input features for specular net
+    specular_dim: int = 3  # fs input features for specular net
 
     # individual_codes # TODO: derived
 
@@ -83,6 +89,8 @@ class Nerf2MeshModelConfig(ModelConfig):
     iter_density: float = 0.0
 
     sigma_layers = 2
+
+    background_color: Literal["random", "black", "white"] = "random"
 
     # TODO: register_buffer
 
@@ -124,10 +132,10 @@ class Nerf2MeshModel(Model):
             specular_dim=self.config.specular_dim,
             hidden_dim_sigma=self.config.hidden_dim_sigma,
             hidden_dim_color=self.config.hidden_dim_color,
-            num_levels_sigma_encoder = self.config.num_levels_sigma_encoder,
-            num_levels_color_encoder = self.config.num_levels_color_encoder,
-            n_features_per_level_sigma_encoder = self.config.n_features_per_level_sigma_encoder,
-            n_features_per_level_color_encoder = self.config.n_features_per_level_color_encoder,
+            num_levels_sigma_encoder=self.config.num_levels_sigma_encoder,
+            num_levels_color_encoder=self.config.num_levels_color_encoder,
+            n_features_per_level_sigma_encoder=self.config.n_features_per_level_sigma_encoder,
+            n_features_per_level_color_encoder=self.config.n_features_per_level_color_encoder,
             num_levels=self.config.grid_levels,
             base_res=self.config.base_resolution,
             max_res=self.config.grid_resolution,
@@ -151,6 +159,10 @@ class Nerf2MeshModel(Model):
         self.sampler = VolumetricSampler(
             occupancy_grid=self.occupancy_grid, density_fn=self.field.density_fn
         )
+
+        self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
+        self.renderer_accumulation = AccumulationRenderer()
+        self.renderer_depth = DepthRenderer(method="expected")
 
         # Criterian in nerf2mesh
         self.loss = torch.nn.MSELoss(reduction="none")
@@ -222,6 +234,7 @@ class Nerf2MeshModel(Model):
 
         ...
 
+    # same as ngp model
     def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor | List]:
         assert self.field is not None
         num_rays = len(ray_bundle)
@@ -238,25 +251,68 @@ class Nerf2MeshModel(Model):
 
         field_outputs = self.field(ray_samples)
 
-        return field_outputs
+        packed_info = nerfacc.pack_info(ray_indices, num_rays)
+        weights = nerfacc.render_weight_from_density(
+            t_starts=ray_samples.frustums.starts[..., 0],
+            t_ends=ray_samples.frustums.ends[..., 0],
+            sigmas=field_outputs[FieldHeadNames.DENSITY][..., 0],
+            packed_info=packed_info,
+        )[0]
+        weights = weights[..., None]
 
-        ...
-        # return super().get_outputs(ray_bundle)
+        rgb = self.renderer_rgb(
+            rgb=field_outputs[FieldHeadNames.RGB],
+            weights=weights,
+            ray_indices=ray_indices,
+            num_rays=num_rays,
+        )
+        depth = self.renderer_depth(
+            weights=weights,
+            ray_samples=ray_samples,
+            ray_indices=ray_indices,
+            num_rays=num_rays,
+        )
+        accumulation = self.renderer_accumulation(
+            weights=weights, ray_indices=ray_indices, num_rays=num_rays
+        )
+
+        outputs = {
+            "rgb": rgb,
+            "accumulation": accumulation,
+            "depth": depth,
+            "num_samples_per_ray": packed_info[:, 1],
+        }
+        return outputs
+
+        # composite_rays_train in nerf2mesh returns weights, weights_sum, depth, image
+        # weights, rgb, depth, accumulation is computed in NGPmodel get_outputs. Are they the same?
+        # computing image is ame
 
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
         # print(outputs)
-        #copied from instant ngp
+        metrics_dict = {}
+        # copied from instant ngp
         # image = batch["image"].to(self.device)
         # image = self.renderer_rgb.blend_background(image)
-        # metrics_dict = {}
+        # TODO: add psnr
         # metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
-        # metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
-        # return metrics_dict
-        ...
-        # return super().get_metrics_dict(outputs, batch)
+        metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
+        return metrics_dict
+        # return super().get_metrics_dict(outputs, batch)z``
 
+    # almost same as ngp model until rgb_loss
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
-        ...
+        image = batch["image"][..., :3].to(self.device)
+        pred_rgb, image = self.renderer_rgb.blend_background_for_loss_computation(
+            pred_image=outputs["rgb"],
+            pred_accumulation=outputs["accumulation"],
+            gt_image=image,
+        )
+        loss = self.loss(image, pred_rgb).mean(-1)
+
+        #TODO: add different losses - lambda_mask, lambda_rgb
+        loss_dict = {"rgb_loss": loss.mean()}
+        return loss_dict
 
     def get_image_metrics_and_images(
         self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
