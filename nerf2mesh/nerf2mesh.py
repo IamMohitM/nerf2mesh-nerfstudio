@@ -6,6 +6,11 @@ import torch
 from dataclasses import dataclass, field
 from typing import Dict, List, Type, Optional, Tuple, Literal
 
+from torch.nn import Parameter
+from torchmetrics.functional import structural_similarity_index_measure
+from torchmetrics.image import PeakSignalNoiseRatio
+from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+
 from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.model_components.ray_samplers import VolumetricSampler
@@ -19,9 +24,9 @@ from nerfstudio.engine.callbacks import (
     TrainingCallbackAttributes,
     TrainingCallbackLocation,
 )
-from torch.nn import Parameter
 from nerf2mesh.field import Nerf2MeshField
 import nerfacc
+from nerfstudio.utils import colormaps
 
 
 @dataclass
@@ -171,6 +176,10 @@ class Nerf2MeshModel(Model):
         # Criterian in nerf2mesh
         self.loss = torch.nn.MSELoss(reduction="none")
 
+        self.psnr = PeakSignalNoiseRatio(data_range=1.0)
+        self.ssim = structural_similarity_index_measure
+        self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
+
     def get_training_callbacks(
         self, training_callback_attributes: TrainingCallbackAttributes
     ) -> List[TrainingCallback]:
@@ -256,6 +265,8 @@ class Nerf2MeshModel(Model):
         field_outputs = self.field(ray_samples)
 
         packed_info = nerfacc.pack_info(ray_indices, num_rays)
+
+        # NOTE: understand weights, rgb, depth, accumulation
         weights = nerfacc.render_weight_from_density(
             t_starts=ray_samples.frustums.starts[..., 0],
             t_ends=ray_samples.frustums.ends[..., 0],
@@ -301,7 +312,7 @@ class Nerf2MeshModel(Model):
         image = batch["image"].to(self.device)
         image = self.renderer_rgb.blend_background(image)
         # TODO: add psnr
-        # metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
+        metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
         metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
         return metrics_dict
 
@@ -332,3 +343,35 @@ class Nerf2MeshModel(Model):
     ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
         ...
         """Returns a dictionary of images and metrics to plot. Here you can apply your colormaps."""
+        image = batch["image"].to(self.device)
+        image = self.renderer_rgb.blend_background(image)
+        rgb = outputs["rgb"]
+        acc = colormaps.apply_colormap(outputs["accumulation"])
+        depth = colormaps.apply_depth_colormap(
+            outputs["depth"],
+            accumulation=outputs["accumulation"],
+        )
+
+        combined_rgb = torch.cat([image, rgb], dim=1)
+        combined_acc = torch.cat([acc], dim=1)
+        combined_depth = torch.cat([depth], dim=1)
+
+        # Switch images from [H, W, C] to [1, C, H, W] for metrics computations
+        image = torch.moveaxis(image, -1, 0)[None, ...]
+        rgb = torch.moveaxis(rgb, -1, 0)[None, ...]
+
+        psnr = self.psnr(image, rgb)
+        ssim = self.ssim(image, rgb)
+        lpips = self.lpips(image, rgb)
+
+        # all of these metrics will be logged as scalars
+        metrics_dict = {"psnr": float(psnr.item()), "ssim": float(ssim), "lpips": float(lpips)}  # type: ignore
+        # TODO(ethan): return an image dictionary
+
+        images_dict = {
+            "img": combined_rgb,
+            "accumulation": combined_acc,
+            "depth": combined_depth,
+        }
+
+        return metrics_dict, images_dict
