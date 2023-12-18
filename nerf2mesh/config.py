@@ -5,9 +5,7 @@ from nerfstudio.pipelines.dynamic_batch import DynamicBatchPipelineConfig
 from nerfstudio.data.datamanagers.base_datamanager import (
     VanillaDataManagerConfig,
 )
-from nerfstudio.data.dataparsers.instant_ngp_dataparser import (
-    InstantNGPDataParserConfig,
-)
+from nerf2mesh.pipeline import Nerf2MeshPipelineConfig
 from nerf2mesh.dataparser import Nerf2MeshDataParserConfig
 from nerf2mesh.nerf2mesh import Nerf2MeshModelConfig
 from nerf2mesh.scheduler import Nerf2MeshSchedulerConfig
@@ -22,7 +20,7 @@ nerf2mesh = MethodSpecification(
         steps_per_save=2000,
         max_num_iterations=max_num_iterations,
         mixed_precision=True,
-        pipeline=DynamicBatchPipelineConfig(
+        pipeline=Nerf2MeshPipelineConfig(
             datamanager=VanillaDataManagerConfig(
                 dataparser=Nerf2MeshDataParserConfig(),
                 train_num_rays_per_batch=4096,

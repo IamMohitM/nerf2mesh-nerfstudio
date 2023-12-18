@@ -3,8 +3,9 @@ from nerfstudio.cameras.rays import RayBundle
 
 import torch
 
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Type, Optional, Tuple, Literal
+from typing import Dict, List, Type, Optional, Tuple, Literal, Union
 
 from torch.nn import Parameter
 from torchmetrics.functional import structural_similarity_index_measure
@@ -27,6 +28,7 @@ from nerfstudio.engine.callbacks import (
 from nerf2mesh.field import Nerf2MeshField
 import nerfacc
 from nerfstudio.utils import colormaps
+from nerf2mesh.utils import Shading
 
 
 @dataclass
@@ -47,7 +49,8 @@ class Nerf2MeshModelConfig(ModelConfig):
     # understand each parameter related to grid
     # occupancy grid
     grid_resolution: int = 128  # same as grid resolution or grid size
-    grid_levels: int = 4  # differnet resolution levels for occupancy grid - this is for efficiency (paper appendix) not the encodng levels
+    # same as self.cascade NerfRenderer
+    grid_levels: int = 1  # differnet resolution levels for occupancy grid - this is for efficiency (paper appendix) not the encodng levels
 
     num_levels_sigma_encoder: int = 16
     num_levels_color_encoder: int = 16
@@ -55,6 +58,8 @@ class Nerf2MeshModelConfig(ModelConfig):
     n_features_per_level_color_encoder: int = 2
     base_resolution: int = 16  # starting resolution
     desired_resolution: int = 2048  # ending resolution
+
+    shading_type: Shading = Shading.diffuse
 
     ## -- Sammpling Parameters
     min_near: float = 0.05  # same as opt.min_near (nerf2mesh)
@@ -151,14 +156,16 @@ class Nerf2MeshModel(Model):
             log2_hashmap_size=self.config.log2hash_map_size,
         )
 
+        self.scene_aabb = Parameter(self.scene_box.aabb.flatten(), requires_grad=False)
+
         if self.config.render_step_size is None:
             # auto step size: ~1000 samples in the base level grid
             self.config.render_step_size = (
                 (self.scene_aabb[3:] - self.scene_aabb[:3]) ** 2
             ).sum().sqrt().item() / 1000
 
-        # TODO: check if occgrid is used in nerf2mesh
-        # TODO: check if occgrid is same as self.opt.trainable_density_grid in nerf2mesh
+        # TODO: check if occgrid is used in nerf2mesh - yes
+        # TODO: check if occgrid is same as self.opt.trainable_density_grid (bool, actual grid is self.density_grid) in nerf2mesh - yes
         self.occupancy_grid = nerfacc.OccGridEstimator(
             roi_aabb=self.scene_aabb,
             resolution=self.config.grid_resolution,
@@ -229,23 +236,19 @@ class Nerf2MeshModel(Model):
         # TODO: add other param groups from NerfRenderer
 
         return {"fields": list(self.field.parameters())}
+    
+    def forward(self, ray_bundle: RayBundle) -> Dict[str, Union[torch.Tensor, List]]:
+        """Run forward starting with a ray bundle. This outputs different things depending on the configuration
+        of the model and whether or not the batch is provided (whether or not we are training basically)
 
-        params.extend(
-            [
-                {"params": self.field.encoder.parameters(), "lr": lr},
-                {"params": self.field.encoder_color.parameters(), "lr": lr},
-                {"params": self.field.sigma_net.parameters(), "lr": lr},
-                {"params": self.field.color_net.parameters(), "lr": lr},
-                {"params": self.field.specular_net.parameters(), "lr": lr},
-            ]
-        )
+        Args:
+            ray_bundle: containing all the information needed to render that ray latents included
+        """
 
-        # if self.opt.sdf:
-        #     params.append({'params': self.variance, 'lr': lr * 0.1})
+        if self.collider is not None:
+            ray_bundle = self.collider(ray_bundle)
 
-        return params
-
-        ...
+        return self.get_outputs(ray_bundle)
 
     # same as ngp model
     def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor | List]:
@@ -262,7 +265,7 @@ class Nerf2MeshModel(Model):
                 cone_angle=self.config.cone_angle,
             )
 
-        field_outputs = self.field(ray_samples)
+        field_outputs = self.field(ray_samples, shading = self.config.shading_type)
 
         packed_info = nerfacc.pack_info(ray_indices, num_rays)
 
@@ -318,7 +321,7 @@ class Nerf2MeshModel(Model):
 
     # almost same as ngp model until rgb_loss
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
-        image = batch['image'][..., :3].to(self.device)
+        image = batch["image"][..., :3].to(self.device)
         image = self.renderer_rgb.blend_background(image)
 
         pred_rgb, image = self.renderer_rgb.blend_background_for_loss_computation(
@@ -329,10 +332,12 @@ class Nerf2MeshModel(Model):
 
         loss = self.loss(pred_rgb, image).mean(-1)
 
-        if self.config.lambda_mask > 0 and batch['image'].size(-1) > 3:
-            gt_mask = batch['image'][..., 3:].to(self.device)
-            pred_mask = outputs['accumulation']
-            loss = loss + self.config.lambda_mask * self.loss(pred_mask.squeeze(1), gt_mask.squeeze(1))
+        if self.config.lambda_mask > 0 and batch["image"].size(-1) > 3:
+            gt_mask = batch["image"][..., 3:].to(self.device)
+            pred_mask = outputs["accumulation"]
+            loss = loss + self.config.lambda_mask * self.loss(
+                pred_mask.squeeze(1), gt_mask.squeeze(1)
+            )
 
         # TODO: add different losses - lambda_mask, lambda_rgb
         loss_dict = {"rgb_loss": loss.mean()}

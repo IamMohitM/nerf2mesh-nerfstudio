@@ -8,7 +8,7 @@ from nerfstudio.field_components.encodings import HashEncoding
 from nerfstudio.field_components.mlp import MLP
 import torch
 from nerfstudio.data.scene_box import SceneBox
-
+from nerf2mesh.utils import Shading
 from torch.autograd import Function
 from torch.cuda.amp import custom_bwd, custom_fwd
 
@@ -93,6 +93,20 @@ class Nerf2MeshField(Field):
             in_dim=specular_dim + 3, num_layers=2, layer_width=32, out_dim=3
         )
 
+    def forward(self, ray_samples: RaySamples, shading: Shading, compute_normals: bool = False, ) -> Dict[FieldHeadNames, Tensor]:
+        """Evaluates the field at points along the ray.
+
+        Args:
+            ray_samples: Samples to evaluate field on.
+        """
+        density, density_embedding = self.get_density(ray_samples)
+
+        field_outputs = self.get_outputs(ray_samples, density_embedding=density_embedding, shading=shading)
+        field_outputs[FieldHeadNames.DENSITY] = density  # type: ignore
+        
+        # field_outputs[FieldHeadNames.NORMALS] = normals  # type: ignore
+        return field_outputs
+
     def get_density(self, ray_samples: RaySamples) -> Tuple[Tensor, Optional[Tensor]]:
         # TODO: check preprocessing if spatial encoding is needed or positions are within the scenebox
         # positions = ray_samples.frustums.get_positions()
@@ -102,9 +116,13 @@ class Nerf2MeshField(Field):
         positions = SceneBox.get_normalized_positions(
             ray_samples.frustums.get_positions(), self.aabb
         )
+        
+        selector = ((positions > 0.0) & (positions < 1.0)).all(dim=-1)
+        positions = positions * selector[..., None]
+        #TODO:  WHy are number of positions !=0 are much less x in nerf2mesh
+        # Both are inputs to encoder
         h = self.encoder(positions)
         h = torch.cat([positions, h], dim=-1)
-        # TODO: add SDF based code
         # h = trunc_exp(self.sigma_net(h))
         h = self.sigma_net(h)
         # TODO: add trunc exp and density before activation
@@ -128,7 +146,7 @@ class Nerf2MeshField(Field):
         return torch.sigmoid(specular)
 
     def get_outputs(
-        self, ray_samples: RaySamples, density_embedding: Tensor | None = None
+        self, ray_samples: RaySamples, shading: Shading, density_embedding: Tensor | None = None
     ) -> Dict[FieldHeadNames, Tensor]:
         # TODO: implement this
         outputs = {}
@@ -143,9 +161,15 @@ class Nerf2MeshField(Field):
         diffuse_feat = self._get_diffuse_color(positions)
         diffuse = diffuse_feat[..., :3]
 
-        specular_feat = self._get_specular_color(directions_flat, diffuse_feat)
+        if shading == Shading.diffuse:
+            color = diffuse
+        else:
+            specular_feat = self._get_specular_color(directions_flat, diffuse_feat)
+            if shading == Shading.specular:
+                color = specular_feat
+            else:
         # add support for shading
-        color = (specular_feat + diffuse).clamp(0, 1)
+                color = (specular_feat + diffuse).clamp(0, 1)
 
         outputs[FieldHeadNames.RGB] = color.view_as(directions)
         outputs["num_samples_per_batch"] = positions.shape[0]

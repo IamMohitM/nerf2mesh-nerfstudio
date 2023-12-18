@@ -20,14 +20,20 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             "env": {
-                "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh"
+                "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
+                "CUDA_VISIBLE_DEVICES": "1"
             },
             "args": [
                 "nerf2mesh",
+                "--output-dir",
+                "outputs/chair/nerf2mesh",
+                "--machine.seed",
+                "10",
                 "instant-ngp-data",
                 "--data",
                 "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/transforms_train.json",
             ]
+            
         }
     ]
 }
