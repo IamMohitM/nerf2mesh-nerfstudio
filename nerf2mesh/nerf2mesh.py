@@ -105,6 +105,7 @@ class Nerf2MeshModelConfig(ModelConfig):
     lambda_mask: float = 0.1
     lambda_rgb: float = 1.0
     lambda_depth: float = 0.1
+    lambda_specular: float = 1e-5
 
     # TODO: register_buffer
 
@@ -150,9 +151,8 @@ class Nerf2MeshModel(Model):
             num_levels_color_encoder=self.config.num_levels_color_encoder,
             n_features_per_level_sigma_encoder=self.config.n_features_per_level_sigma_encoder,
             n_features_per_level_color_encoder=self.config.n_features_per_level_color_encoder,
-            num_levels=self.config.grid_levels,
             base_res=self.config.base_resolution,
-            max_res=self.config.grid_resolution,
+            max_res=self.config.desired_resolution,
             log2_hashmap_size=self.config.log2hash_map_size,
         )
 
@@ -177,6 +177,8 @@ class Nerf2MeshModel(Model):
         )
 
         self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
+        # self.specular_rgb = RGBRenderer(background_color=self.config.background_color)
+        
         self.renderer_accumulation = AccumulationRenderer()
         self.renderer_depth = DepthRenderer(method="expected")
 
@@ -299,6 +301,7 @@ class Nerf2MeshModel(Model):
             "accumulation": accumulation,
             "depth": depth,
             "num_samples_per_ray": packed_info[:, 1],
+            "specular": field_outputs.get("specular"),
         }
         return outputs
 
@@ -306,15 +309,39 @@ class Nerf2MeshModel(Model):
         # weights, rgb, depth, accumulation is computed in NGPmodel get_outputs. Are they the same?
         # computing image is ame
 
+
+    @torch.no_grad()
+    def get_outputs_for_camera_ray_bundle(self, camera_ray_bundle: RayBundle) -> Dict[str, torch.Tensor]:
+        """Takes in camera parameters and computes the output of the model.
+
+        Args:
+            camera_ray_bundle: ray bundle to calculate outputs over
+        """
+        num_rays_per_chunk = self.config.eval_num_rays_per_chunk
+        image_height, image_width = camera_ray_bundle.origins.shape[:2]
+        num_rays = len(camera_ray_bundle)
+        outputs_lists = defaultdict(list)
+        for i in range(0, num_rays, num_rays_per_chunk):
+            start_idx = i
+            end_idx = i + num_rays_per_chunk
+            ray_bundle = camera_ray_bundle.get_row_major_sliced_ray_bundle(start_idx, end_idx)
+            outputs = self.forward(ray_bundle=ray_bundle)
+            for output_name, output in outputs.items():  # type: ignore
+                if not torch.is_tensor(output):
+                    # TODO: handle lists of tensors as well
+                    continue
+                outputs_lists[output_name].append(output)
+        outputs = {}
+        for output_name, outputs_list in outputs_lists.items():
+            if output_name == "specular":
+                continue
+            outputs[output_name] = torch.cat(outputs_list).view(image_height, image_width, -1)  # type: ignore
+        return outputs
+
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
-        # print(outputs)
         metrics_dict = {}
-        # copied from instant ngp
-        # image = batch["image"].to(self.device)
-        # image = self.renderer_rgb.blend_background(image)
         image = batch["image"].to(self.device)
         image = self.renderer_rgb.blend_background(image)
-        # TODO: add psnr
         metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
         metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
         return metrics_dict
@@ -322,7 +349,7 @@ class Nerf2MeshModel(Model):
     # almost same as ngp model until rgb_loss
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
         image = batch["image"][..., :3].to(self.device)
-        image = self.renderer_rgb.blend_background(image)
+        # image = self.renderer_rgb.blend_background(image)
 
         pred_rgb, image = self.renderer_rgb.blend_background_for_loss_computation(
             pred_image=outputs["rgb"],
@@ -330,18 +357,24 @@ class Nerf2MeshModel(Model):
             gt_image=image,
         )
 
-        loss = self.loss(pred_rgb, image).mean(-1)
+        loss = self.config.lambda_rgb * self.loss(pred_rgb, image).mean(-1)
 
         if self.config.lambda_mask > 0 and batch["image"].size(-1) > 3:
             gt_mask = batch["image"][..., 3:].to(self.device)
             pred_mask = outputs["accumulation"]
-            loss = loss + self.config.lambda_mask * self.loss(
+            loss += self.config.lambda_mask * self.loss(
                 pred_mask.squeeze(1), gt_mask.squeeze(1)
             )
 
-        # TODO: add different losses - lambda_mask, lambda_rgb
+        if self.config.lambda_specular > 0 and (specular := outputs.get('specular')) is not None:
+            loss += self.config.lambda_specular * (specular ** 2).sum(-1).mean()
+
+        #TODO: check if accumulation same as weigths_sum in nerf2mesh
+        
         loss_dict = {"rgb_loss": loss.mean()}
         return loss_dict
+    
+    
 
     def get_image_metrics_and_images(
         self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]

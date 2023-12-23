@@ -42,11 +42,9 @@ class Nerf2MeshField(Field):
         num_levels_color_encoder: int,
         n_features_per_level_sigma_encoder: int,
         n_features_per_level_color_encoder: int,
-        num_levels: int,
         base_res: int,
         max_res: int,
         log2_hashmap_size,
-        features_per_level: int = 2,
         geom_init: bool = False,
         implementation: str = "tcnn",
     ) -> None:
@@ -170,6 +168,7 @@ class Nerf2MeshField(Field):
             else:
         # add support for shading
                 color = (specular_feat + diffuse).clamp(0, 1)
+            outputs['specular'] = specular_feat
 
         outputs[FieldHeadNames.RGB] = color.view_as(directions)
         outputs["num_samples_per_batch"] = positions.shape[0]
