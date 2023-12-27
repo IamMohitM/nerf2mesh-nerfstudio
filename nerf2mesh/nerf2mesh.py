@@ -54,7 +54,7 @@ class Nerf2MeshModelConfig(ModelConfig):
 
     num_levels_sigma_encoder: int = 16
     num_levels_color_encoder: int = 16
-    n_features_per_level_sigma_encoder: int = 2
+    n_features_per_level_sigma_encoder: int = 1
     n_features_per_level_color_encoder: int = 2
     base_resolution: int = 16  # starting resolution
     desired_resolution: int = 2048  # ending resolution
@@ -88,7 +88,7 @@ class Nerf2MeshModelConfig(ModelConfig):
 
     cuda_ray: bool = True
 
-    trainable_density_grid: bool = True
+    trainable_density_grid: bool = False
     log2hash_map_size: int = 19
 
     # density_grid #TODO: derived
@@ -119,10 +119,6 @@ class Nerf2MeshModel(Model):
     config: Nerf2MeshModelConfig
     field: Nerf2MeshField
 
-    # encoder
-    # fields
-    # renderer - NerfRender
-    # sampler
 
     # #Raybundlers > generate samples  --> field
 
@@ -183,7 +179,7 @@ class Nerf2MeshModel(Model):
         self.renderer_depth = DepthRenderer(method="expected")
 
         # Criterian in nerf2mesh
-        self.loss = torch.nn.MSELoss(reduction="none")
+        self.rgb_loss = torch.nn.MSELoss(reduction="none")
 
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.ssim = structural_similarity_index_measure
@@ -218,7 +214,7 @@ class Nerf2MeshModel(Model):
         #             "weight_decay": 0,
         #         }
         #     )
-
+        # this one you could use self.occupancy_grid.parameters() and you'll have to update loss as well
         # if self.opt.trainable_density_grid:
         #     params.append(
         #         {"params": self.density_grid, "lr": self.opt.lr, "weight_decay": 0}
@@ -232,8 +228,6 @@ class Nerf2MeshModel(Model):
         #             "weight_decay": 0,
         #         }
         #     )
-
-        lr = 0.01
 
         # TODO: add other param groups from NerfRenderer
 
@@ -271,7 +265,6 @@ class Nerf2MeshModel(Model):
 
         packed_info = nerfacc.pack_info(ray_indices, num_rays)
 
-        # NOTE: understand weights, rgb, depth, accumulation
         weights = nerfacc.render_weight_from_density(
             t_starts=ray_samples.frustums.starts[..., 0],
             t_ends=ray_samples.frustums.ends[..., 0],
@@ -296,6 +289,11 @@ class Nerf2MeshModel(Model):
             weights=weights, ray_indices=ray_indices, num_rays=num_rays
         )
 
+        # the diff between weights and accumuation
+        # weights is individual weight of each point considered on each ray
+        # accumulation is the sum of weights of all points considered on each ray
+        # therefore, accumulation shape will be equal to number of rays
+
         outputs = {
             "rgb": rgb,
             "accumulation": accumulation,
@@ -304,10 +302,6 @@ class Nerf2MeshModel(Model):
             "specular": field_outputs.get("specular"),
         }
         return outputs
-
-        # composite_rays_train in nerf2mesh returns weights, weights_sum, depth, image
-        # weights, rgb, depth, accumulation is computed in NGPmodel get_outputs. Are they the same?
-        # computing image is ame
 
 
     @torch.no_grad()
@@ -357,23 +351,21 @@ class Nerf2MeshModel(Model):
             gt_image=image,
         )
 
-        loss = self.config.lambda_rgb * self.loss(pred_rgb, image).mean(-1)
+        loss = self.config.lambda_rgb * self.rgb_loss(pred_rgb, image).mean(-1)
 
         if self.config.lambda_mask > 0 and batch["image"].size(-1) > 3:
             gt_mask = batch["image"][..., 3:].to(self.device)
             pred_mask = outputs["accumulation"]
-            loss += self.config.lambda_mask * self.loss(
+            loss += self.config.lambda_mask * self.rgb_loss(
                 pred_mask.squeeze(1), gt_mask.squeeze(1)
             )
 
         if self.config.lambda_specular > 0 and (specular := outputs.get('specular')) is not None:
             loss += self.config.lambda_specular * (specular ** 2).sum(-1).mean()
-
-        #TODO: check if accumulation same as weigths_sum in nerf2mesh
         
         loss_dict = {"rgb_loss": loss.mean()}
         return loss_dict
-    
+
     
 
     def get_image_metrics_and_images(
@@ -404,7 +396,6 @@ class Nerf2MeshModel(Model):
 
         # all of these metrics will be logged as scalars
         metrics_dict = {"psnr": float(psnr.item()), "ssim": float(ssim), "lpips": float(lpips)}  # type: ignore
-        # TODO(ethan): return an image dictionary
 
         images_dict = {
             "img": combined_rgb,

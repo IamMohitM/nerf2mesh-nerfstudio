@@ -28,8 +28,6 @@ class _trunc_exp(Function):
 
 
 trunc_exp = _trunc_exp.apply
-
-
 class Nerf2MeshField(Field):
     def __init__(
         self,
@@ -59,6 +57,7 @@ class Nerf2MeshField(Field):
             log2_hashmap_size=log2_hashmap_size,
             features_per_level=n_features_per_level_sigma_encoder,
             implementation=implementation,
+            interpolation="linear",
         )
 
         in_activation = torch.nn.Softplus() if geom_init else torch.nn.ReLU()
@@ -78,6 +77,7 @@ class Nerf2MeshField(Field):
             log2_hashmap_size=log2_hashmap_size,
             features_per_level=n_features_per_level_color_encoder,
             implementation=implementation,
+            interpolation="linear",
         )
 
         self.color_net = MLP(
@@ -85,10 +85,12 @@ class Nerf2MeshField(Field):
             num_layers=3,
             layer_width=hidden_dim_color,
             out_dim=3 + specular_dim,
+            activation=in_activation,
         )
 
         self.specular_net = MLP(
-            in_dim=specular_dim + 3, num_layers=2, layer_width=32, out_dim=3
+            in_dim=specular_dim + 3, num_layers=2, layer_width=32, out_dim=3,
+             activation=in_activation,
         )
 
     def forward(self, ray_samples: RaySamples, shading: Shading, compute_normals: bool = False, ) -> Dict[FieldHeadNames, Tensor]:

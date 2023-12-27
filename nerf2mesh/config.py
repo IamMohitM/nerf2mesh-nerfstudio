@@ -1,7 +1,6 @@
 from nerfstudio.plugins.types import MethodSpecification
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.engine.optimizers import AdamOptimizerConfig
-from nerfstudio.pipelines.dynamic_batch import DynamicBatchPipelineConfig
 from nerfstudio.data.datamanagers.base_datamanager import (
     VanillaDataManagerConfig,
 )

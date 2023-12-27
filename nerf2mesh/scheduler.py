@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 class Nerf2MeshSchedulerConfig(SchedulerConfig):
     _target: Type = field(default_factory=lambda: Nerf2MeshScheduler)
     max_steps: int = 30000
+    verbose: bool = False
 
 
 class Nerf2MeshScheduler(Scheduler):
@@ -21,4 +22,5 @@ class Nerf2MeshScheduler(Scheduler):
             lr_lambda=lambda iter: lr_init + 0.99 * (iter / 500)
             if iter <= 500
             else 0.1 ** ((iter - 500) / (self.config.max_steps - 500)), #TODO: The self.config.max_steps should be checked
+            verbose=self.config.verbose,
         )
