@@ -1,20 +1,20 @@
 from typing import Type
 from dataclasses import dataclass, field
 
-from nerfstudio.pipelines.dynamic_batch import DynamicBatchPipelineConfig, DynamicBatchPipeline
+from nerfstudio.pipelines.dynamic_batch import VanillaPipelineConfig, VanillaPipeline
 from nerfstudio.utils import profiler
 from nerf2mesh.utils import Shading
 
 
 
 @dataclass
-class Nerf2MeshPipelineConfig(DynamicBatchPipelineConfig):
+class Nerf2MeshPipelineConfig(VanillaPipelineConfig):
     _target: Type = field(default_factory=lambda: Nerf2MeshPipeline)
     stage: int = 0 # training stage 0 - coarse mesh only, 1 - fine mesh only
     diffuse_only: bool = False # if true, only train diffuse
     initial_diffuse_steps: int = 1000
 
-class Nerf2MeshPipeline(DynamicBatchPipeline):
+class Nerf2MeshPipeline(VanillaPipeline):
     def __init__(self, config, *args, **kwargs):
         super().__init__(config, *args, **kwargs)
 
