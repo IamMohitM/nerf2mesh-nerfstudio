@@ -33,7 +33,8 @@ class Nerf2MeshField(Field):
         # super().__init__(aabb = aabb, base_res=base_res, max_res=max_res, log2_hashmap_size = log2_hashmap_size, **kwargs)
         super().__init__()
         self.register_buffer("aabb", aabb)
-        self.geo_feat_dim = kwargs.get('geo_feat_dim', 15)
+        self.register_buffer("max_res", torch.tensor(max_res))
+
         self.encoder = HashEncoding(
             num_levels=num_levels_sigma_encoder,
             min_res=base_res,
@@ -47,7 +48,6 @@ class Nerf2MeshField(Field):
         #TODO: change in_dim and out_dim(remove self.geo_feat_dim) eventually
         self.sigma_net = MLP(
             in_dim=self.encoder.get_out_dim(),
-            # in_dim=self.encoder.get_out_dim(),
             out_dim=1,
             num_layers=num_layers_sigma,
             layer_width=hidden_dim_sigma,
@@ -55,7 +55,7 @@ class Nerf2MeshField(Field):
             out_activation=None,
             implementation=implementation
         )
-        # self.mlp_base = torch.nn.Sequential(self.encoder, self.sigma_net)
+        self.density_mlp = torch.nn.Sequential(self.encoder, self.sigma_net)
 
         self.encoder_color = HashEncoding(
             num_levels=num_levels_color_encoder,
@@ -104,9 +104,8 @@ class Nerf2MeshField(Field):
         )
         selector = ((positions > 0.0) & (positions < 1.0)).all(dim=-1)
         positions = positions * selector[..., None]
-        h = self.encoder(positions)
+        h = self.density_mlp(positions)
         # h = torch.cat([positions_flat, h], dim=-1)
-        h = self.sigma_net(h)
         density = trunc_exp(h.to(positions))
         density = density * selector[..., None]
         return density, None
@@ -122,7 +121,7 @@ class Nerf2MeshField(Field):
         h = self.color_net(h)
         return torch.sigmoid(h)
 
-    def _get_specular_color(self, d, diffuse_feat, c=None):
+    def _get_specular_color(self, d, diffuse_feat):
         specular = self.specular_net(torch.cat([d, diffuse_feat[..., 3:]], dim=-1))
         return torch.sigmoid(specular)
 
