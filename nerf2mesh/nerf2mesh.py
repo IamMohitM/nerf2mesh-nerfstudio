@@ -14,6 +14,7 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.models.base_model import Model, ModelConfig
+from nerfstudio.models.instant_ngp import NGPModel, InstantNGPModelConfig
 from nerfstudio.model_components.ray_samplers import VolumetricSampler
 from nerfstudio.model_components.renderers import (
     RGBRenderer,
@@ -30,27 +31,36 @@ import nerfacc
 from nerfstudio.utils import colormaps
 from nerf2mesh.utils import Shading
 
-
 @dataclass
-class Nerf2MeshModelConfig(ModelConfig):
+class Nerf2MeshModelConfig(InstantNGPModelConfig):
     _target: Type = field(default_factory=lambda: Nerf2MeshModel)
+    grid_levels: int =1
+    # alpha_thre:float=0.0
+    # cone_angle:float=0.0
+    disable_scene_contraction: bool=True
+    # near_plane: float=0.01
+    ## -- Sammpling Parameters
+    min_near: float = 0.01 # same as opt.min_near (nerf2mesh)
+    min_far: float = 1000  # infinite - same as opt.min_far (nerf2mesh
+# @dataclass
+# class Nerf2MeshModelConfig(ModelConfig):
+#     # _target: Type = field(default_factory=lambda: Nerf2MeshModel)
+#     _target: Type = field(default_factory=lambda: NGPModel)
 
-    real_bound: float = 1.0
+#     real_bound: float = 1.0
 
-    contract: bool = False
-    collider_params: Optional[Dict[str, float]] = None
+#     contract: bool = False
+#     collider_params: Optional[Dict[str, float]] = None
 
-    # bound: float = 1.0 #TODO derived
+#     # bound: float = 1.0 #TODO derived
 
-    # cascade: float TODO: add cascade in model def derived
     hidden_dim_sigma: int = 32
     hidden_dim_color: int = 64
-    # TODO: check if grid_resolution and desired_resolution are the same
-    # understand each parameter related to grid
-    # occupancy grid
-    grid_resolution: int = 128  # same as grid resolution or grid size
-    # same as self.cascade NerfRenderer
-    grid_levels: int = 1  # differnet resolution levels for occupancy grid - this is for efficiency (paper appendix) not the encodng levels
+#     # understand each parameter related to grid
+#     # occupancy grid
+#     grid_resolution: int = 128  # same as grid resolution or grid size
+#     # same as self.cascade NerfRenderer
+#     grid_levels: int = 1  # differnet resolution levels for occupancy grid - this is for efficiency (paper appendix) not the encodng levels
 
     num_levels_sigma_encoder: int = 16
     num_levels_color_encoder: int = 16
@@ -62,67 +72,54 @@ class Nerf2MeshModelConfig(ModelConfig):
     shading_type: Shading = Shading.diffuse
 
     ## -- Sammpling Parameters
-    min_near: float = 0.05  # same as opt.min_near (nerf2mesh)
+    min_near: float = 0.01 # same as opt.min_near (nerf2mesh)
     min_far: float = 1000  # infinite - same as opt.min_far (nerf2mesh)
 
     # following parameters copied from instant-ngp nerfstudio
-    alpha_thre: float = 0.01
+    alpha_thre: float = 0.0
     """Threshold for opacity skipping."""
-    cone_angle: float = 0.004
+    cone_angle: float = 0.0#04
     """Should be set to 0.0 for blender scenes but 1./256 for real scenes."""
     render_step_size: Optional[float] = None
     """Minimum step size for rendering."""
 
-    ## ----------------------
+#     ## ----------------------
 
-    density_threshold: int = 10
+#     density_threshold: int = 10
 
-    # aabb_train: torch.Tensor # TODO: derived
-    # aabb_infer: torch.Tensor # TODO: derived
+#     # aabb_train: torch.Tensor # TODO: derived
+#     # aabb_infer: torch.Tensor # TODO: derived
 
-    individual_num: int = 500
-    individual_dim: int = 0
-    specular_dim: int = 3  # fs input features for specular net
+#     individual_num: int = 500
+#     individual_dim: int = 0
+    specular_dim: int = 3  # fs in paper input features for specular net
 
-    # individual_codes # TODO: derived
+#     # individual_codes # TODO: derived
 
-    cuda_ray: bool = True
 
-    trainable_density_grid: bool = False
+#     trainable_density_grid: bool = False
     log2hash_map_size: int = 19
-
-    # density_grid #TODO: derived
-
-    # density_bitfield #TODO: derived
-
-    mean_density: float = 0.0
-    iter_density: float = 0.0
 
     sigma_layers = 2
 
-    background_color: Literal["random", "black", "white"] = "random"
+    background_color: Literal["random", "black", "white"] = "black"
 
     lambda_mask: float = 0.1
     lambda_rgb: float = 1.0
     lambda_depth: float = 0.1
     lambda_specular: float = 1e-5
 
-    # TODO: register_buffer
 
-    # NOTE: all default configs are passed to nerf2mesh field
-    # NOTE: all dervied are computed in nerf2mesh field
+#     # NOTE: all default configs are passed to nerf2mesh field
+#     # NOTE: all dervied are computed in nerf2mesh field
 
-    # TODO: config for stage 1 if needed
+#     # TODO: config for stage 1 if needed
 
 
-class Nerf2MeshModel(Model):
+class Nerf2MeshModel(NGPModel):
     config: Nerf2MeshModelConfig
     field: Nerf2MeshField
 
-
-    # #Raybundlers > generate samples  --> field
-
-    # NOTE: to Model I must pass a scenebox and a config
 
     def __init__(
         self,
@@ -131,14 +128,21 @@ class Nerf2MeshModel(Model):
     ) -> None:
         super().__init__(config=config, **kwargs)
 
+
     def populate_modules(self):
+        # super().populate_modules()
         self.scene_aabb = torch.nn.Parameter(
             self.scene_box.aabb.flatten(), requires_grad=False
         )
 
-        # TODO: add remaining parameters
         self.field = Nerf2MeshField(
             aabb=self.scene_box.aabb,
+            appearance_embedding_dim=0 if self.config.use_appearance_embedding else 32,
+            num_images=self.num_train_data,
+            base_res=self.config.base_resolution,
+            max_res=self.config.desired_resolution,
+            spatial_distortion=None,
+            log2_hashmap_size=self.config.log2hash_map_size,
             num_layers_sigma=self.config.sigma_layers,
             specular_dim=self.config.specular_dim,
             hidden_dim_sigma=self.config.hidden_dim_sigma,
@@ -147,9 +151,6 @@ class Nerf2MeshModel(Model):
             num_levels_color_encoder=self.config.num_levels_color_encoder,
             n_features_per_level_sigma_encoder=self.config.n_features_per_level_sigma_encoder,
             n_features_per_level_color_encoder=self.config.n_features_per_level_color_encoder,
-            base_res=self.config.base_resolution,
-            max_res=self.config.desired_resolution,
-            log2_hashmap_size=self.config.log2hash_map_size,
         )
 
         self.scene_aabb = Parameter(self.scene_box.aabb.flatten(), requires_grad=False)
@@ -160,8 +161,6 @@ class Nerf2MeshModel(Model):
                 (self.scene_aabb[3:] - self.scene_aabb[:3]) ** 2
             ).sum().sqrt().item() / 1000
 
-        # TODO: check if occgrid is used in nerf2mesh - yes
-        # TODO: check if occgrid is same as self.opt.trainable_density_grid (bool, actual grid is self.density_grid) in nerf2mesh - yes
         self.occupancy_grid = nerfacc.OccGridEstimator(
             roi_aabb=self.scene_aabb,
             resolution=self.config.grid_resolution,
@@ -204,33 +203,7 @@ class Nerf2MeshModel(Model):
         ]
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
-        params = []
-
-        # if self.individual_codes is not None:
-        #     params.append(
-        #         {
-        #             "params": self.individual_codes,
-        #             "lr": self.opt.lr * 0.1,
-        #             "weight_decay": 0,
-        #         }
-        #     )
-        # this one you could use self.occupancy_grid.parameters() and you'll have to update loss as well
-        # if self.opt.trainable_density_grid:
-        #     params.append(
-        #         {"params": self.density_grid, "lr": self.opt.lr, "weight_decay": 0}
-        #     )
-
-        # if self.glctx is not None:
-        #     params.append(
-        #         {
-        #             "params": self.vertices_offsets,
-        #             "lr": self.opt.lr_vert,
-        #             "weight_decay": 0,
-        #         }
-        #     )
-
-        # TODO: add other param groups from NerfRenderer
-
+        
         return {"fields": list(self.field.parameters())}
     
     def forward(self, ray_bundle: RayBundle) -> Dict[str, Union[torch.Tensor, List]]:
@@ -246,9 +219,8 @@ class Nerf2MeshModel(Model):
 
         return self.get_outputs(ray_bundle)
 
-    # same as ngp model
+    # # same as ngp model
     def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor | List]:
-        assert self.field is not None
         num_rays = len(ray_bundle)
 
         with torch.no_grad():
@@ -262,7 +234,6 @@ class Nerf2MeshModel(Model):
             )
 
         field_outputs = self.field(ray_samples, shading = self.config.shading_type)
-
         packed_info = nerfacc.pack_info(ray_indices, num_rays)
 
         weights = nerfacc.render_weight_from_density(
@@ -404,3 +375,6 @@ class Nerf2MeshModel(Model):
         }
 
         return metrics_dict, images_dict
+
+
+# class Nerf2MeshModel()

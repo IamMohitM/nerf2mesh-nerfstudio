@@ -21,6 +21,8 @@
             "justMyCode": false,
             "env": {
                 "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
+                // "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
+                "TORCH_EXTENSIONS_DIR": "temp/torch_extensions",
                 "CUDA_VISIBLE_DEVICES": "1"
             },
             "args": [
@@ -29,11 +31,141 @@
                 "outputs/chair/nerf2mesh",
                 "--machine.seed",
                 "10",
+                "--logging.local-writer.enable",
+                "True",
+                "--logging.relative-log-dir",
+                "./logs/chair/nerf2mesh",
+                "--logging.local-writer.max-log-size",
+                "0",
+                "--project_name=nerf2mesh_nerfstudio",
+                "--experiment_name=chair",
+                "--vis=viewer",
+                // "instant-ngp-data",
+                // "nerf2mesh-data",
+                
+                "--data",
+                "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/transforms_train.json",
+            ]
+            
+        },
+        {
+            "name": "Train Ship W&B",
+            "type": "python",
+            "request": "launch",
+            "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
+                // "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
+                "TORCH_EXTENSIONS_DIR": "temp/torch_extensions",
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
+            "args": [
+                "nerf2mesh",
+                "--output-dir",
+                "outputs/ship/nerf2mesh",
+                "--machine.seed",
+                "10",
+                "--project_name=nerf2mesh_nerfstudio",
+                "--experiment_name=ship",
+                "--vis=viewer+wandb",
+                "--data",
+                "~/datasets/nerf_synthetic_small/nerf_synthetic/ship/transforms_train.json",
+            ]
+            
+        },
+        {
+            "name": "Train Chair W&B",
+            "type": "python",
+            "request": "launch",
+            "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
+                // "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
+                "TORCH_EXTENSIONS_DIR": "temp/torch_extensions",
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
+            "args": [
+                "nerf2mesh",
+                "--output-dir",
+                "outputs/chair/nerf2mesh",
+                "--machine.seed",
+                "10",
+                "--logging.local-writer.enable",
+                "True",
+                "--logging.relative-log-dir",
+                "./logs/chair/nerf2mesh",
+                "--logging.local-writer.max-log-size",
+                "0",
+                "--project_name=nerf2mesh_nerfstudio",
+                "--experiment_name=chair",
+                "--vis=viewer+wandb",
+                "instant-ngp-data",
+                // "nerf2mesh-data",
+                
+                "--data",
+                "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/transforms_train.json",
+            ]
+            
+        },
+        {
+            "name": "Instant NGP - Train Chair",
+            "type": "python",
+            "request": "launch",
+            "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
+                // "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh-data=nerf2mesh.config:Nerf2MeshDataParserConfig",
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
+            "args": [
+                "instant-ngp-bounded",
+                "--output-dir",
+                "outputs/chair/instant-ngp",
+                "--machine.seed",
+                "10",
+                "--logging.local-writer.enable",
+                "True",
+                "--logging.relative-log-dir",
+                "./logs/chair/nerf2mesh",
+                "--logging.local-writer.max-log-size",
+                "0",
                 "instant-ngp-data",
                 "--data",
                 "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/transforms_train.json",
             ]
             
+        },
+        {
+            "name": "NerFacto - Train Chair",
+            "type": "python",
+            "request": "launch",
+            "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
+            "args": [
+                "nerfacto",
+                "--output-dir",
+                "outputs/chair/nerfacto",
+                "--machine.seed",
+                "10",
+                "--logging.local-writer.max-log-size",
+                "0",
+                // "instant-ngp-data",
+                "--data",
+                // "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/transforms_train.json",
+                "~/datasets/nerf_kiri_poses/bella_pose/",
+            ]
+            
         }
+
     ]
 }

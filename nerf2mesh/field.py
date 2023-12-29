@@ -1,34 +1,18 @@
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 from nerfstudio.cameras.rays import RaySamples
 from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.fields.base_field import Field, get_normalized_directions
+from nerfstudio.field_components.activations import trunc_exp
 from torch import Tensor
-from typing import Tuple
 from nerfstudio.field_components.encodings import HashEncoding
 from nerfstudio.field_components.mlp import MLP
+from nerfstudio.fields.nerfacto_field import NerfactoField
 import torch
 from nerfstudio.data.scene_box import SceneBox
 from nerf2mesh.utils import Shading
-from torch.autograd import Function
-from torch.cuda.amp import custom_bwd, custom_fwd
 
-
-class _trunc_exp(Function):
-    @staticmethod
-    @custom_fwd(cast_inputs=torch.float32)  # cast to float32
-    def forward(ctx, x):
-        ctx.save_for_backward(x)
-        return torch.exp(x)
-
-    @staticmethod
-    @custom_bwd
-    def backward(ctx, g):
-        x = ctx.saved_tensors[0]
-        return g * torch.exp(x.clamp(-15, 15))
-
-
-trunc_exp = _trunc_exp.apply
 class Nerf2MeshField(Field):
+    ...
     def __init__(
         self,
         aabb: torch.Tensor,
@@ -42,14 +26,14 @@ class Nerf2MeshField(Field):
         n_features_per_level_color_encoder: int,
         base_res: int,
         max_res: int,
-        log2_hashmap_size,
-        geom_init: bool = False,
+        log2_hashmap_size: int,
         implementation: str = "tcnn",
+        **kwargs
     ) -> None:
+        # super().__init__(aabb = aabb, base_res=base_res, max_res=max_res, log2_hashmap_size = log2_hashmap_size, **kwargs)
         super().__init__()
-
         self.register_buffer("aabb", aabb)
-
+        self.geo_feat_dim = kwargs.get('geo_feat_dim', 15)
         self.encoder = HashEncoding(
             num_levels=num_levels_sigma_encoder,
             min_res=base_res,
@@ -60,15 +44,18 @@ class Nerf2MeshField(Field):
             interpolation="linear",
         )
 
-        in_activation = torch.nn.Softplus() if geom_init else torch.nn.ReLU()
+        #TODO: change in_dim and out_dim(remove self.geo_feat_dim) eventually
         self.sigma_net = MLP(
-            in_dim=3 + self.encoder.get_out_dim(),
+            in_dim=self.encoder.get_out_dim(),
+            # in_dim=self.encoder.get_out_dim(),
             out_dim=1,
             num_layers=num_layers_sigma,
             layer_width=hidden_dim_sigma,
-            activation=in_activation,
+            activation=torch.nn.ReLU(),
             out_activation=None,
+            implementation=implementation
         )
+        # self.mlp_base = torch.nn.Sequential(self.encoder, self.sigma_net)
 
         self.encoder_color = HashEncoding(
             num_levels=num_levels_color_encoder,
@@ -85,12 +72,14 @@ class Nerf2MeshField(Field):
             num_layers=3,
             layer_width=hidden_dim_color,
             out_dim=3 + specular_dim,
-            activation=in_activation,
+            activation=torch.nn.ReLU(),
+            implementation=implementation
         )
 
         self.specular_net = MLP(
             in_dim=specular_dim + 3, num_layers=2, layer_width=32, out_dim=3,
-             activation=in_activation,
+             activation=torch.nn.ReLU(),
+             implementation=implementation
         )
 
     def forward(self, ray_samples: RaySamples, shading: Shading, compute_normals: bool = False, ) -> Dict[FieldHeadNames, Tensor]:
@@ -100,36 +89,28 @@ class Nerf2MeshField(Field):
             ray_samples: Samples to evaluate field on.
         """
         density, density_embedding = self.get_density(ray_samples)
+        
 
         field_outputs = self.get_outputs(ray_samples, density_embedding=density_embedding, shading=shading)
+        # field_outputs = self.get_outputs(ray_samples, density_embedding=density_embedding)
         field_outputs[FieldHeadNames.DENSITY] = density  # type: ignore
         
-        # field_outputs[FieldHeadNames.NORMALS] = normals  # type: ignore
         return field_outputs
 
     def get_density(self, ray_samples: RaySamples) -> Tuple[Tensor, Optional[Tensor]]:
-        # TODO: check preprocessing if spatial encoding is needed or positions are within the scenebox
-        # positions = ray_samples.frustums.get_positions()
-        # selector = ((positions > 0.0) & (positions < 1.0)).all(dim=-1)
-        # positions = positions * selector[..., None]
 
         positions = SceneBox.get_normalized_positions(
             ray_samples.frustums.get_positions(), self.aabb
         )
-        
         selector = ((positions > 0.0) & (positions < 1.0)).all(dim=-1)
         positions = positions * selector[..., None]
-        #TODO:  WHy are number of positions !=0 are much less x in nerf2mesh
-        # Both are inputs to encoder
         h = self.encoder(positions)
-        h = torch.cat([positions, h], dim=-1)
-        # h = trunc_exp(self.sigma_net(h))
+        # h = torch.cat([positions_flat, h], dim=-1)
         h = self.sigma_net(h)
-        # TODO: add trunc exp and density before activation
-
-        density = trunc_exp(h[..., 0])
+        density = trunc_exp(h.to(positions))
+        density = density * selector[..., None]
         return density, None
-
+    
     def _get_diffuse_color(self, x, c=None):
         h = self.encoder_color(x)
         h = torch.cat([x, h], dim=-1)
@@ -148,23 +129,19 @@ class Nerf2MeshField(Field):
     def get_outputs(
         self, ray_samples: RaySamples, shading: Shading, density_embedding: Tensor | None = None
     ) -> Dict[FieldHeadNames, Tensor]:
-        # TODO: implement this
         outputs = {}
         positions = SceneBox.get_normalized_positions(
             ray_samples.frustums.get_positions(), self.aabb
         )
-        directions = get_normalized_directions(ray_samples.frustums.directions)
-        directions_flat = directions.view(-1, 3)
-        # d = self.encoder_color(directions_flat)
-
-        # same as geo_feat from nerf2mesh
+        selector = ((positions > 0.0) & (positions < 1.0)).all(dim=-1)
+        positions = positions * selector[..., None]
         diffuse_feat = self._get_diffuse_color(positions)
         diffuse = diffuse_feat[..., :3]
-
         if shading == Shading.diffuse:
             color = diffuse
         else:
-            specular_feat = self._get_specular_color(directions_flat, diffuse_feat)
+            directions = get_normalized_directions(ray_samples.frustums.directions)
+            specular_feat = self._get_specular_color(directions, diffuse_feat)
             if shading == Shading.specular:
                 color = specular_feat
             else:
@@ -172,7 +149,5 @@ class Nerf2MeshField(Field):
                 color = (specular_feat + diffuse).clamp(0, 1)
             outputs['specular'] = specular_feat
 
-        outputs[FieldHeadNames.RGB] = color.view_as(directions)
-        outputs["num_samples_per_batch"] = positions.shape[0]
-        # outputs[FieldHeadNames.]
+        outputs[FieldHeadNames.RGB] = color
         return outputs
