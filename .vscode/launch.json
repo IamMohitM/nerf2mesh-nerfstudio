@@ -49,7 +49,7 @@
             
         },
         {
-            "name": "Train Ship W&B",
+            "name": "Train lego W&B",
             "type": "python",
             "request": "launch",
             "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
@@ -68,10 +68,10 @@
                 "--machine.seed",
                 "10",
                 "--project_name=nerf2mesh_nerfstudio",
-                "--experiment_name=ship",
+                "--experiment_name=lego",
                 "--vis=viewer+wandb",
                 "--data",
-                "~/datasets/nerf_synthetic_small/nerf_synthetic/ship/transforms_train.json",
+                "~/datasets/nerf_synthetic_small/nerf_synthetic/lego/transforms_train.json",
             ]
             
         },
@@ -94,18 +94,9 @@
                 "outputs/chair/nerf2mesh",
                 "--machine.seed",
                 "10",
-                "--logging.local-writer.enable",
-                "True",
-                "--logging.relative-log-dir",
-                "./logs/chair/nerf2mesh",
-                "--logging.local-writer.max-log-size",
-                "0",
                 "--project_name=nerf2mesh_nerfstudio",
                 "--experiment_name=chair",
                 "--vis=viewer+wandb",
-                "instant-ngp-data",
-                // "nerf2mesh-data",
-                
                 "--data",
                 "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/transforms_train.json",
             ]

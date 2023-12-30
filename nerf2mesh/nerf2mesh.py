@@ -31,36 +31,37 @@ import nerfacc
 from nerfstudio.utils import colormaps
 from nerf2mesh.utils import Shading
 
+
 @dataclass
 class Nerf2MeshModelConfig(InstantNGPModelConfig):
     _target: Type = field(default_factory=lambda: Nerf2MeshModel)
-    grid_levels: int =1
+    grid_levels: int = 1
     # alpha_thre:float=0.0
     # cone_angle:float=0.0
-    disable_scene_contraction: bool=True
+    disable_scene_contraction: bool = True
     # near_plane: float=0.01
     ## -- Sammpling Parameters
-    min_near: float = 0.01 # same as opt.min_near (nerf2mesh)
+    min_near: float = 0.01  # same as opt.min_near (nerf2mesh)
     min_far: float = 1000  # infinite - same as opt.min_far (nerf2mesh
-# @dataclass
-# class Nerf2MeshModelConfig(ModelConfig):
-#     # _target: Type = field(default_factory=lambda: Nerf2MeshModel)
-#     _target: Type = field(default_factory=lambda: NGPModel)
+    # @dataclass
+    # class Nerf2MeshModelConfig(ModelConfig):
+    #     # _target: Type = field(default_factory=lambda: Nerf2MeshModel)
+    #     _target: Type = field(default_factory=lambda: NGPModel)
 
-#     real_bound: float = 1.0
+    #     real_bound: float = 1.0
 
-#     contract: bool = False
-#     collider_params: Optional[Dict[str, float]] = None
+    #     contract: bool = False
+    #     collider_params: Optional[Dict[str, float]] = None
 
-#     # bound: float = 1.0 #TODO derived
+    #     # bound: float = 1.0 #TODO derived
 
     hidden_dim_sigma: int = 32
     hidden_dim_color: int = 64
-#     # understand each parameter related to grid
-#     # occupancy grid
-#     grid_resolution: int = 128  # same as grid resolution or grid size
-#     # same as self.cascade NerfRenderer
-#     grid_levels: int = 1  # differnet resolution levels for occupancy grid - this is for efficiency (paper appendix) not the encodng levels
+    #     # understand each parameter related to grid
+    #     # occupancy grid
+    #     grid_resolution: int = 128  # same as grid resolution or grid size
+    #     # same as self.cascade NerfRenderer
+    #     grid_levels: int = 1  # differnet resolution levels for occupancy grid - this is for efficiency (paper appendix) not the encodng levels
 
     num_levels_sigma_encoder: int = 16
     num_levels_color_encoder: int = 16
@@ -72,32 +73,31 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     shading_type: Shading = Shading.diffuse
 
     ## -- Sammpling Parameters
-    min_near: float = 0.01 # same as opt.min_near (nerf2mesh)
+    min_near: float = 0.01  # same as opt.min_near (nerf2mesh)
     min_far: float = 1000  # infinite - same as opt.min_far (nerf2mesh)
 
     # following parameters copied from instant-ngp nerfstudio
     alpha_thre: float = 0.0
     """Threshold for opacity skipping."""
-    cone_angle: float = 0.0#04
+    cone_angle: float = 0.0  # 04
     """Should be set to 0.0 for blender scenes but 1./256 for real scenes."""
     render_step_size: Optional[float] = None
     """Minimum step size for rendering."""
 
-#     ## ----------------------
+    #     ## ----------------------
 
-#     density_threshold: int = 10
+    #     density_threshold: int = 10
 
-#     # aabb_train: torch.Tensor # TODO: derived
-#     # aabb_infer: torch.Tensor # TODO: derived
+    #     # aabb_train: torch.Tensor # TODO: derived
+    #     # aabb_infer: torch.Tensor # TODO: derived
 
-#     individual_num: int = 500
-#     individual_dim: int = 0
+    #     individual_num: int = 500
+    #     individual_dim: int = 0
     specular_dim: int = 3  # fs in paper input features for specular net
 
-#     # individual_codes # TODO: derived
+    #     # individual_codes # TODO: derived
 
-
-#     trainable_density_grid: bool = False
+    #     trainable_density_grid: bool = False
     log2hash_map_size: int = 19
 
     sigma_layers = 2
@@ -120,14 +120,12 @@ class Nerf2MeshModel(NGPModel):
     config: Nerf2MeshModelConfig
     field: Nerf2MeshField
 
-
-    def __init__(
-        self,
-        config: Nerf2MeshModelConfig,
-        **kwargs,
-    ) -> None:
-        super().__init__(config=config, **kwargs)
-
+    # def __init__(
+    #     self,
+    #     config: Nerf2MeshModelConfig,
+    #     **kwargs,
+    # ) -> None:
+    #     super().__init__(config=config, **kwargs)
 
     def populate_modules(self):
         # super().populate_modules()
@@ -172,8 +170,7 @@ class Nerf2MeshModel(NGPModel):
         )
 
         self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
-        # self.specular_rgb = RGBRenderer(background_color=self.config.background_color)
-        
+
         self.renderer_accumulation = AccumulationRenderer()
         self.renderer_depth = DepthRenderer(method="expected")
 
@@ -203,9 +200,8 @@ class Nerf2MeshModel(NGPModel):
         ]
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
-        
         return {"fields": list(self.field.parameters())}
-    
+
     def forward(self, ray_bundle: RayBundle) -> Dict[str, Union[torch.Tensor, List]]:
         """Run forward starting with a ray bundle. This outputs different things depending on the configuration
         of the model and whether or not the batch is provided (whether or not we are training basically)
@@ -233,7 +229,7 @@ class Nerf2MeshModel(NGPModel):
                 cone_angle=self.config.cone_angle,
             )
 
-        field_outputs = self.field(ray_samples, shading = self.config.shading_type)
+        field_outputs = self.field(ray_samples, shading=self.config.shading_type)
         packed_info = nerfacc.pack_info(ray_indices, num_rays)
 
         weights = nerfacc.render_weight_from_density(
@@ -250,6 +246,15 @@ class Nerf2MeshModel(NGPModel):
             ray_indices=ray_indices,
             num_rays=num_rays,
         )
+
+        if (specular := field_outputs.get("specular")) is not None:
+            specular = self.renderer_rgb(
+                rgb=specular,
+                weights=weights,
+                ray_indices=ray_indices,
+                num_rays=num_rays,
+            )
+
         depth = self.renderer_depth(
             weights=weights,
             ray_samples=ray_samples,
@@ -270,13 +275,14 @@ class Nerf2MeshModel(NGPModel):
             "accumulation": accumulation,
             "depth": depth,
             "num_samples_per_ray": packed_info[:, 1],
-            "specular": field_outputs.get("specular"),
+            "specular": specular,
         }
         return outputs
 
-
     @torch.no_grad()
-    def get_outputs_for_camera_ray_bundle(self, camera_ray_bundle: RayBundle) -> Dict[str, torch.Tensor]:
+    def get_outputs_for_camera_ray_bundle(
+        self, camera_ray_bundle: RayBundle
+    ) -> Dict[str, torch.Tensor]:
         """Takes in camera parameters and computes the output of the model.
 
         Args:
@@ -289,7 +295,9 @@ class Nerf2MeshModel(NGPModel):
         for i in range(0, num_rays, num_rays_per_chunk):
             start_idx = i
             end_idx = i + num_rays_per_chunk
-            ray_bundle = camera_ray_bundle.get_row_major_sliced_ray_bundle(start_idx, end_idx)
+            ray_bundle = camera_ray_bundle.get_row_major_sliced_ray_bundle(
+                start_idx, end_idx
+            )
             outputs = self.forward(ray_bundle=ray_bundle)
             for output_name, output in outputs.items():  # type: ignore
                 if not torch.is_tensor(output):
@@ -298,18 +306,10 @@ class Nerf2MeshModel(NGPModel):
                 outputs_lists[output_name].append(output)
         outputs = {}
         for output_name, outputs_list in outputs_lists.items():
-            if output_name in ["specular", "num_samples_per_ray"]:
+            if output_name in ["num_samples_per_ray"]:
                 continue
             outputs[output_name] = torch.cat(outputs_list).view(image_height, image_width, -1)  # type: ignore
         return outputs
-
-    def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
-        metrics_dict = {}
-        image = batch["image"].to(self.device)
-        image = self.renderer_rgb.blend_background(image)
-        metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
-        metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
-        return metrics_dict
 
     # almost same as ngp model until rgb_loss
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
@@ -331,50 +331,11 @@ class Nerf2MeshModel(NGPModel):
                 pred_mask.squeeze(1), gt_mask.squeeze(1)
             )
 
-        if self.config.lambda_specular > 0 and (specular := outputs.get('specular')) is not None:
-            loss += self.config.lambda_specular * (specular ** 2).sum(-1).mean()
-        
+        if (
+            self.config.lambda_specular > 0
+            and (specular := outputs.get("specular")) is not None
+        ):
+            loss += self.config.lambda_specular * (specular**2).sum(-1).mean()
+
         loss_dict = {"rgb_loss": loss.mean()}
         return loss_dict
-
-    
-
-    def get_image_metrics_and_images(
-        self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
-    ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
-        ...
-        """Returns a dictionary of images and metrics to plot. Here you can apply your colormaps."""
-        image = batch["image"].to(self.device)
-        image = self.renderer_rgb.blend_background(image)
-        rgb = outputs["rgb"]
-        acc = colormaps.apply_colormap(outputs["accumulation"])
-        depth = colormaps.apply_depth_colormap(
-            outputs["depth"],
-            accumulation=outputs["accumulation"],
-        )
-
-        combined_rgb = torch.cat([image, rgb], dim=1)
-        combined_acc = torch.cat([acc], dim=1)
-        combined_depth = torch.cat([depth], dim=1)
-
-        # Switch images from [H, W, C] to [1, C, H, W] for metrics computations
-        image = torch.moveaxis(image, -1, 0)[None, ...]
-        rgb = torch.moveaxis(rgb, -1, 0)[None, ...]
-
-        psnr = self.psnr(image, rgb)
-        ssim = self.ssim(image, rgb)
-        lpips = self.lpips(image, rgb)
-
-        # all of these metrics will be logged as scalars
-        metrics_dict = {"psnr": float(psnr.item()), "ssim": float(ssim), "lpips": float(lpips)}  # type: ignore
-
-        images_dict = {
-            "img": combined_rgb,
-            "accumulation": combined_acc,
-            "depth": combined_depth,
-        }
-
-        return metrics_dict, images_dict
-
-
-# class Nerf2MeshModel()
