@@ -9,3 +9,6 @@ notebooks/
 
 *.pyc
 temp/
+
+*.so
+meshes/

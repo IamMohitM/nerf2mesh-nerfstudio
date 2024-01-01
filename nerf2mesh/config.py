@@ -10,7 +10,7 @@ from nerf2mesh.nerf2mesh import Nerf2MeshModelConfig
 from nerf2mesh.scheduler import Nerf2MeshSchedulerConfig
 
 
-max_num_iterations = 10000
+max_num_iterations = 5000
 
 nerf2mesh = MethodSpecification(
     config=TrainerConfig(
