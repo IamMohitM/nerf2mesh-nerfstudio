@@ -6,7 +6,6 @@ from nerfstudio.field_components.activations import trunc_exp
 from torch import Tensor
 from nerfstudio.field_components.encodings import HashEncoding
 from nerfstudio.field_components.mlp import MLP
-from nerfstudio.fields.nerfacto_field import NerfactoField
 import torch
 from nerfstudio.data.scene_box import SceneBox
 from nerf2mesh.utils import Shading

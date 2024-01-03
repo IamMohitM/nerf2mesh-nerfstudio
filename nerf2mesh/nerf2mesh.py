@@ -57,9 +57,6 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
 
     disable_scene_contraction: bool = True
     # near_plane: float=0.01
-    ## -- Sammpling Parameters
-    min_near: float = 0.01  # same as opt.min_near (nerf2mesh)
-    min_far: float = 1000  # infinite - same as opt.min_far (nerf2mesh)
 
     hidden_dim_sigma: int = 32
     hidden_dim_color: int = 64
@@ -74,25 +71,11 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
 
     ## -- Sammpling Parameters
     min_near: float = 0.01  # same as opt.min_near (nerf2mesh)
-    min_far: float = 1000  # infinite - same as opt.min_far (nerf2mesh)
+    max_far: float = 1000  # infinite - same as opt.min_far (nerf2mesh)
 
-    # following parameters copied from instant-ngp nerfstudio
-    
 
-    #     ## ----------------------
-
-    #     density_threshold: int = 10
-
-    #     # aabb_train: torch.Tensor # TODO: derived
-    #     # aabb_infer: torch.Tensor # TODO: derived
-
-    #     individual_num: int = 500
-    #     individual_dim: int = 0
     specular_dim: int = 3  # fs in paper input features for specular net
 
-    #     # individual_codes # TODO: derived
-
-    #     trainable_density_grid: bool = False
     log2hash_map_size: int = 19
 
     sigma_layers = 2
@@ -112,6 +95,7 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     clean_min_d: int = 5
     visibility_mask_dilation: int = 5
     sdf: bool = False
+    mvps: torch.tensor = None
 
 #     # NOTE: all default configs are passed to nerf2mesh field
 #     # NOTE: all dervied are computed in nerf2mesh field
@@ -203,20 +187,6 @@ class Nerf2MeshModel(NGPModel):
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         return {"fields": list(self.field.parameters())}
-
-    def forward(self, ray_bundle: RayBundle) -> Dict[str, Union[torch.Tensor, List]]:
-        """Run forward starting with a ray bundle. This outputs different things depending on the configuration
-        of the model and whether or not the batch is provided (whether or not we are training basically)
-
-        Args:
-            ray_bundle: containing all the information needed to render that ray latents included
-        """
-
-        if self.collider is not None:
-            ray_bundle = self.collider(ray_bundle)
-
-        return self.get_outputs(ray_bundle)
-
     # # same as ngp model
     def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor | List]:
         num_rays = len(ray_bundle)
@@ -225,7 +195,7 @@ class Nerf2MeshModel(NGPModel):
             ray_samples, ray_indices = self.sampler(
                 ray_bundle=ray_bundle,
                 near_plane=self.config.min_near,
-                far_plane=self.config.min_far,
+                far_plane=self.config.max_far,
                 render_step_size=self.config.render_step_size,
                 alpha_thre=self.config.alpha_thre,
                 cone_angle=self.config.cone_angle,
@@ -354,24 +324,23 @@ class Nerf2MeshModel(NGPModel):
         if resolution is None:
             resolution = self.config.grid_resolution
 
-        device = self.occupancy_grid.device
-
         #TODO: check correctness
         density_thresh = min(self.occupancy_grid.occs.clamp(min = 0).mean(), self.config.density_thresh)
 
         # sigmas = np.zeros([resolution] * 3, dtype=np.float32)
-        sigmas = torch.zeros([resolution] * 3, dtype=torch.float32, device=device)
+        sigmas = torch.zeros([resolution] * 3, dtype=torch.float32, device=self.device)
 
         if resolution == self.config.grid_resolution:
             # re-map from morton code to regular coords...
-            all_indices = torch.arange(resolution**3, device=device, dtype=torch.int)
+            all_indices = torch.arange(resolution**3, device=self.device, dtype=torch.int)
             all_coords = raymarching.morton3D_invert(all_indices).long()
             sigmas[tuple(all_coords.T)] = self.density_grid[0]
         else:
             # query
-            X = torch.linspace(-1, 1, resolution).split(S)
-            Y = torch.linspace(-1, 1, resolution).split(S)
-            Z = torch.linspace(-1, 1, resolution).split(S)
+
+            X = torch.linspace(-0.5, 0.5, resolution).split(S)
+            Y = torch.linspace(-0.5, 0.5, resolution).split(S)
+            Z = torch.linspace(-0.5, 0.5, resolution).split(S)
 
             for xi, xs in enumerate(X):
                 for yi, ys in enumerate(Y):
@@ -381,9 +350,8 @@ class Nerf2MeshModel(NGPModel):
                             [xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)],
                             dim=-1,
                         )  # [S, 3]
-                        #TODO: add autocast to config
-                        with torch.cuda.amp.autocast(enabled=True):
-                            val = self.field.density_fn(pts.to(device))  # [S, 1]
+                        with torch.cuda.amp.autocast(enabled=self.config.fp16):
+                            val = self.field.density_fn(pts.to(self.device))  # [S, 1]
                         sigmas[
                             xi * S : xi * S + len(xs),
                             yi * S : yi * S + len(ys),
@@ -393,10 +361,10 @@ class Nerf2MeshModel(NGPModel):
             # use the density_grid as a baseline mask (also excluding untrained regions)
             if not self.config.sdf:
                 mask = torch.zeros(
-                    [self.config.grid_resolution] * 3, dtype=torch.float32, device=device
+                    [self.config.grid_resolution] * 3, dtype=torch.float32, device=self.device
                 )
                 all_indices = torch.arange(
-                    self.config.grid_resolution**3, device=device, dtype=torch.int
+                    self.config.grid_resolution**3, device=self.device, dtype=torch.int
                 )
                 all_coords = raymarching.morton3D_invert(all_indices).long()
                 mask[tuple(all_coords.T)] = self.occupancy_grid.occs
@@ -415,9 +383,6 @@ class Nerf2MeshModel(NGPModel):
         sigmas = torch.nan_to_num(sigmas, 0)
         sigmas = sigmas.cpu().numpy()
 
-        # import kiui
-        # for i in range(254,255):
-        #     kiui.vis.plot_matrix((sigmas[..., i]).astype(np.float32))
 
         if self.config.sdf:
             vertices, triangles = mcubes.marching_cubes(-sigmas, 0)
@@ -468,7 +433,7 @@ class Nerf2MeshModel(NGPModel):
             if self.config.sdf:
                 # assume background contracted in [-2, 2], process it specially
                 sigmas = torch.zeros(
-                    [resolution] * 3, dtype=torch.float32, device=device
+                    [resolution] * 3, dtype=torch.float32, device=self.device
                 )
                 for xi, xs in enumerate(X):
                     for yi, ys in enumerate(Y):
@@ -483,7 +448,7 @@ class Nerf2MeshModel(NGPModel):
                                 dim=-1,
                             )  # [S, 3]
                             with torch.cuda.amp.autocast(enabled=self.config.fp16):
-                                val = self.density(pts.to(device))  # [S, 1]
+                                val = self.density(pts.to(self.device))  # [S, 1]
                             sigmas[
                                 xi * S : xi * S + len(xs),
                                 yi * S : yi * S + len(ys),
@@ -578,7 +543,7 @@ class Nerf2MeshModel(NGPModel):
                 target_reso = self.config.env_reso
                 decimate_target //= 2  # empirical...
 
-                all_indices = torch.arange(reso**3, device=device, dtype=torch.int)
+                all_indices = torch.arange(reso**3, device=self.device, dtype=torch.int)
                 all_coords = raymarching.morton3D_invert(all_indices).cpu().numpy()
 
                 # for each cas >= 1
@@ -587,7 +552,7 @@ class Nerf2MeshModel(NGPModel):
                     half_grid_size = bound / target_reso
 
                     # remap from density_grid
-                    occ = torch.zeros([reso] * 3, dtype=torch.float32, device=device)
+                    occ = torch.zeros([reso] * 3, dtype=torch.float32, device=self.device)
                     occ[tuple(all_coords.T)] = self.density_grid[cas]
 
                     # remove the center (before mcubes)
