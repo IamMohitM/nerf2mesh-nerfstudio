@@ -4,8 +4,9 @@ from nerfstudio.engine.optimizers import AdamOptimizerConfig
 from nerfstudio.data.datamanagers.base_datamanager import (
     VanillaDataManagerConfig,
 )
+# from nerfstudio.data.dataparsers.instant_ngp_dataparser import InstantNGPDataParserConfig
+from nerf2mesh.dataparser import Nerf2MeshDataParserConfig
 from nerf2mesh.pipeline import Nerf2MeshPipelineConfig
-from nerf2mesh.dataparser import InstantNGPDataParserConfig
 from nerf2mesh.nerf2mesh import Nerf2MeshModelConfig
 from nerf2mesh.scheduler import Nerf2MeshSchedulerConfig
 
@@ -21,7 +22,7 @@ nerf2mesh = MethodSpecification(
         mixed_precision=True,
         pipeline=Nerf2MeshPipelineConfig(
             datamanager=VanillaDataManagerConfig(
-                dataparser=InstantNGPDataParserConfig(),
+                dataparser=Nerf2MeshDataParserConfig(),
                 train_num_rays_per_batch=4096,
                 eval_num_rays_per_batch=4096,
             ),

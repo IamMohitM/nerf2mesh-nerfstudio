@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "justMyCode": true
+            "justMyCode": false
         },
         {
             "name": "Train Chair",
@@ -21,7 +21,7 @@
             "justMyCode": false,
             "env": {
                 "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
-                // "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
+                "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
                 "TORCH_EXTENSIONS_DIR": "temp/torch_extensions",
                 "CUDA_VISIBLE_DEVICES": "1"
             },
@@ -31,25 +31,16 @@
                 "outputs/chair/nerf2mesh",
                 "--machine.seed",
                 "10",
-                "--logging.local-writer.enable",
-                "True",
-                "--logging.relative-log-dir",
-                "./logs/chair/nerf2mesh",
-                "--logging.local-writer.max-log-size",
-                "0",
                 "--project_name=nerf2mesh_nerfstudio",
                 "--experiment_name=chair",
                 "--vis=viewer",
-                // "instant-ngp-data",
-                // "nerf2mesh-data",
-                
                 "--data",
                 "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/transforms_train.json",
             ]
             
         },
         {
-            "name": "Train lego W&B",
+            "name": "Train ficus W&B",
             "type": "python",
             "request": "launch",
             "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
@@ -64,14 +55,14 @@
             "args": [
                 "nerf2mesh",
                 "--output-dir",
-                "outputs/ship/nerf2mesh",
+                "outputs/ficus/nerf2mesh",
                 "--machine.seed",
                 "10",
                 "--project_name=nerf2mesh_nerfstudio",
-                "--experiment_name=lego",
+                "--experiment_name=ficus",
                 "--vis=viewer+wandb",
                 "--data",
-                "~/datasets/nerf_synthetic_small/nerf_synthetic/lego/transforms_train.json",
+                "~/datasets/nerf_synthetic_small/nerf_synthetic/ficus/transforms_train.json",
             ]
             
         },
@@ -95,7 +86,37 @@
                 "--machine.seed",
                 "10",
                 "--project_name=nerf2mesh_nerfstudio",
-                "--experiment_name=chair",
+                "--experiment_name=chair+mesh",
+                "--vis=viewer+wandb",
+                "--data",
+                "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/transforms_train.json",
+            ]
+            
+        },
+        {
+            "name": "Load Train Chair W&B",
+            "type": "python",
+            "request": "launch",
+            "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
+                // "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
+                "TORCH_EXTENSIONS_DIR": "temp/torch_extensions",
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
+            "args": [
+                "nerf2mesh",
+                "--output-dir",
+                "outputs/chair/nerf2mesh",
+                "--load-dir",
+                "outputs/chair/nerf2mesh/chair+mesh/nerf2mesh/2024-01-03_132954/nerfstudio_models",
+                "--max-num-iterations=1",
+                "--machine.seed",
+                "10",
+                "--project_name=nerf2mesh_nerfstudio",
+                "--experiment_name=chair+mesh",
                 "--vis=viewer+wandb",
                 "--data",
                 "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/transforms_train.json",
@@ -110,8 +131,6 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             "env": {
-                "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
-                // "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh-data=nerf2mesh.config:Nerf2MeshDataParserConfig",
                 "CUDA_VISIBLE_DEVICES": "1"
             },
             "args": [
@@ -120,10 +139,6 @@
                 "outputs/chair/instant-ngp",
                 "--machine.seed",
                 "10",
-                "--logging.local-writer.enable",
-                "True",
-                "--logging.relative-log-dir",
-                "./logs/chair/nerf2mesh",
                 "--logging.local-writer.max-log-size",
                 "0",
                 "instant-ngp-data",
@@ -156,7 +171,32 @@
                 "~/datasets/nerf_kiri_poses/bella_pose/",
             ]
             
-        }
-
+        },
+        {
+            "name": "Export Marching Cube Chair",
+            "type": "python",
+            "request": "launch",
+            "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/exporter.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
+                // "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
+                "TORCH_EXTENSIONS_DIR": "temp/torch_extensions",
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
+            "args": [
+                "poisson",
+                "--load-config",
+                "outputs/chair/nerf2mesh/chair/nerf2mesh/2023-12-30_135617/config.yml",
+                "--output-dir",
+                "outputs/chair/nerf2mesh/chair/nerf2mesh/2023-12-30_135617/mc_mesh",
+                "--bounding-box-min",
+                "-0.5", "-0.5", "-0.5",
+                "--bounding-box-max",
+                "0.5", "0.5", "0.5",
+            ]
+            
+        },
     ]
 }
