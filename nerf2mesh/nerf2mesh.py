@@ -2,12 +2,13 @@ import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Type, Optional, Literal, Union
-
+import tqdm
 import trimesh
 import mcubes
 import numpy as np
 import raymarching
 import nerfacc
+import nvdiffrast.torch as dr
 
 import torch
 import torch.nn.functional as F
@@ -45,7 +46,7 @@ from nerf2mesh.utils import (
 class Nerf2MeshModelConfig(InstantNGPModelConfig):
     _target: Type = field(default_factory=lambda: Nerf2MeshModel)
 
-    #occupancy grid
+    # occupancy grid
     grid_levels: int = 1
     density_thresh: float = 10
     alpha_thre: float = 0.0
@@ -73,7 +74,6 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     min_near: float = 0.01  # same as opt.min_near (nerf2mesh)
     max_far: float = 1000  # infinite - same as opt.min_far (nerf2mesh)
 
-
     specular_dim: int = 3  # fs in paper input features for specular net
 
     log2hash_map_size: int = 19
@@ -87,7 +87,7 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     lambda_depth: float = 0.1
     lambda_specular: float = 1e-5
 
-    #coarse mesh params
+    # coarse mesh params
     coarse_mesh_path: str = "meshes/mesh_0.ply"
     env_reso: int = 256
     fp16: bool = True
@@ -96,6 +96,7 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     visibility_mask_dilation: int = 5
     sdf: bool = False
     mvps: torch.tensor = None
+
 
 #     # NOTE: all default configs are passed to nerf2mesh field
 #     # NOTE: all dervied are computed in nerf2mesh field
@@ -108,12 +109,16 @@ class Nerf2MeshModel(NGPModel):
     field: Nerf2MeshField
 
     def populate_modules(self):
+        self.mvps = None
+        self.image_height = None
+        self.image_width = None
+        self.glctx = None
         # super().populate_modules()
         self.scene_aabb = torch.nn.Parameter(
             self.scene_box.aabb.flatten(), requires_grad=False
         )
 
-        self.register_buffer("bound", self.scene_box.aabb.max() )
+        self.register_buffer("bound", self.scene_box.aabb.max())
 
         self.field = Nerf2MeshField(
             aabb=self.scene_box.aabb,
@@ -132,7 +137,6 @@ class Nerf2MeshModel(NGPModel):
             n_features_per_level_sigma_encoder=self.config.n_features_per_level_sigma_encoder,
             n_features_per_level_color_encoder=self.config.n_features_per_level_color_encoder,
         )
-
 
         if self.config.render_step_size is None:
             # auto step size: ~1000 samples in the base level grid
@@ -167,14 +171,13 @@ class Nerf2MeshModel(NGPModel):
     ) -> List[TrainingCallback]:
         callbacks = super().get_training_callbacks(training_callback_attributes)
 
-        #TODO: add dataset for mesh visibility culling
         def export_coarse_mesh(step: int):
-                self.export_stage0(
-                    save_path=os.path.join(self.config.coarse_mesh_path),
-                    resolution=512,
-                    decimate_target=3e5,
-                    S=self.config.grid_resolution,
-                )
+            self.export_stage0(
+                save_path=os.path.join(self.config.coarse_mesh_path),
+                resolution=512,
+                decimate_target=3e5,
+                S=self.config.grid_resolution,
+            )
 
         callbacks.append(
             TrainingCallback(
@@ -187,6 +190,7 @@ class Nerf2MeshModel(NGPModel):
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         return {"fields": list(self.field.parameters())}
+
     # # same as ngp model
     def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor | List]:
         num_rays = len(ray_bundle)
@@ -317,22 +321,24 @@ class Nerf2MeshModel(NGPModel):
         return loss_dict
 
     @torch.no_grad()
-    def export_stage0(
-        self, save_path, resolution=None, decimate_target=1e5, dataset=None, S=128
-    ):
+    def export_stage0(self, save_path, resolution=None, decimate_target=1e5, S=128):
         # only for the inner mesh inside [-1, 1]
         if resolution is None:
             resolution = self.config.grid_resolution
 
-        #TODO: check correctness
-        density_thresh = min(self.occupancy_grid.occs.clamp(min = 0).mean(), self.config.density_thresh)
+        # TODO: check correctness
+        density_thresh = min(
+            self.occupancy_grid.occs.mean(), self.config.density_thresh
+        )
 
         # sigmas = np.zeros([resolution] * 3, dtype=np.float32)
         sigmas = torch.zeros([resolution] * 3, dtype=torch.float32, device=self.device)
 
         if resolution == self.config.grid_resolution:
             # re-map from morton code to regular coords...
-            all_indices = torch.arange(resolution**3, device=self.device, dtype=torch.int)
+            all_indices = torch.arange(
+                resolution**3, device=self.device, dtype=torch.int
+            )
             all_coords = raymarching.morton3D_invert(all_indices).long()
             sigmas[tuple(all_coords.T)] = self.density_grid[0]
         else:
@@ -361,10 +367,14 @@ class Nerf2MeshModel(NGPModel):
             # use the density_grid as a baseline mask (also excluding untrained regions)
             if not self.config.sdf:
                 mask = torch.zeros(
-                    [self.config.grid_resolution] * 3, dtype=torch.float32, device=self.device
+                    [self.config.grid_resolution] * 3,
+                    dtype=torch.float32,
+                    device=self.device,
                 )
                 all_indices = torch.arange(
-                    self.config.grid_resolution**3, device=self.device, dtype=torch.int
+                    self.config.grid_resolution**3,
+                    device=self.device,
+                    dtype=torch.int,
                 )
                 all_coords = raymarching.morton3D_invert(all_indices).long()
                 mask[tuple(all_coords.T)] = self.occupancy_grid.occs
@@ -383,21 +393,20 @@ class Nerf2MeshModel(NGPModel):
         sigmas = torch.nan_to_num(sigmas, 0)
         sigmas = sigmas.cpu().numpy()
 
-
         if self.config.sdf:
             vertices, triangles = mcubes.marching_cubes(-sigmas, 0)
         else:
             vertices, triangles = mcubes.marching_cubes(sigmas, density_thresh)
 
-        vertices = vertices / (resolution - 1.0) * 2 - 1
+        vertices = vertices / (resolution - 0.5) * 2 - 0.5
         vertices = vertices.astype(np.float32)
         triangles = triangles.astype(np.int32)
 
         ### visibility test.
-        if dataset is not None:
+        if self.mvps is not None:
             visibility_mask = (
                 self.mark_unseen_triangles(
-                    vertices, triangles, dataset.mvps, dataset.H, dataset.W
+                    vertices, triangles, self.mvps, self.image_height, self.image_width
                 )
                 .cpu()
                 .numpy()
@@ -509,14 +518,14 @@ class Nerf2MeshModel(NGPModel):
                     f"(x <= {xmn}) || (x >= {xmx}) || (y <= {ymn}) || (y >= {ymx}) || (z <= {zmn} ) || (z >= {zmx})",
                 )
 
-                if dataset is not None:
+                if self.mvps is not None:
                     visibility_mask = (
                         self.mark_unseen_triangles(
                             vertices_out,
                             triangles_out,
-                            dataset.mvps,
-                            dataset.H,
-                            dataset.W,
+                            self.mvps,
+                            self.image_height,
+                            self.image_width,
                         )
                         .cpu()
                         .numpy()
@@ -543,7 +552,9 @@ class Nerf2MeshModel(NGPModel):
                 target_reso = self.config.env_reso
                 decimate_target //= 2  # empirical...
 
-                all_indices = torch.arange(reso**3, device=self.device, dtype=torch.int)
+                all_indices = torch.arange(
+                    reso**3, device=self.device, dtype=torch.int
+                )
                 all_coords = raymarching.morton3D_invert(all_indices).cpu().numpy()
 
                 # for each cas >= 1
@@ -552,7 +563,9 @@ class Nerf2MeshModel(NGPModel):
                     half_grid_size = bound / target_reso
 
                     # remap from density_grid
-                    occ = torch.zeros([reso] * 3, dtype=torch.float32, device=self.device)
+                    occ = torch.zeros(
+                        [reso] * 3, dtype=torch.float32, device=self.device
+                    )
                     occ[tuple(all_coords.T)] = self.density_grid[cas]
 
                     # remove the center (before mcubes)
@@ -634,14 +647,14 @@ class Nerf2MeshModel(NGPModel):
                         f"[INFO] exporting outer mesh at cas {cas}, v = {vertices_out.shape}, f = {triangles_out.shape}"
                     )
 
-                    if dataset is not None:
+                    if self.mvps is not None:
                         visibility_mask = (
                             self.mark_unseen_triangles(
                                 vertices_out,
                                 triangles_out,
-                                dataset.mvps,
-                                dataset.H,
-                                dataset.W,
+                                self.mvps,
+                                self.image_height,
+                                self.image_width
                             )
                             .cpu()
                             .numpy()
@@ -658,3 +671,48 @@ class Nerf2MeshModel(NGPModel):
                         vertices_out, triangles_out, process=False
                     )  # important, process=True leads to seg fault...
                     mesh_out.export(os.path.join(save_path, f"mesh_{cas}.ply"))
+
+    @torch.no_grad()
+    def mark_unseen_triangles(self, vertices, triangles, mvps, H, W):
+        # vertices: coords in world system
+        # mvps: [B, 4, 4]
+        device = self.device
+
+        if isinstance(vertices, np.ndarray):
+            vertices = torch.from_numpy(vertices).contiguous().float().to(device)
+
+        if isinstance(triangles, np.ndarray):
+            triangles = torch.from_numpy(triangles).contiguous().int().to(device)
+
+        mask = torch.zeros_like(triangles[:, 0])  # [M,], for face.
+
+        if self.glctx is None:
+            self.glctx = dr.RasterizeGLContext(output_db=False)
+
+        for mvp in tqdm.tqdm(mvps):
+            vertices_clip = (
+                torch.matmul(
+                    F.pad(vertices, pad=(0, 1), mode="constant", value=1.0),
+                    torch.transpose(mvp.to(device), 0, 1),
+                )
+                .float()
+                .unsqueeze(0)
+            )  # [1, N, 4]
+
+            # ENHANCE: lower resolution since we don't need that high?
+            rast, _ = dr.rasterize(
+                self.glctx, vertices_clip, triangles, (H, W)
+            )  # [1, H, W, 4]
+
+            # collect the triangle_id (it is offseted by 1)
+            trig_id = rast[..., -1].long().view(-1) - 1
+
+            # no need to accumulate, just a 0/1 mask.
+            mask[trig_id] += 1  # wrong for duplicated indices, but faster.
+            # mask.index_put_((trig_id,), torch.ones(trig_id.shape[0], device=device, dtype=mask.dtype), accumulate=True)
+
+        mask = mask == 0  # unseen faces by all cameras
+
+        print(f"[mark unseen trigs] {mask.sum()} from {mask.shape[0]}")
+
+        return mask  # [N]

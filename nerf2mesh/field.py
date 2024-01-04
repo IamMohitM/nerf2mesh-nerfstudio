@@ -10,8 +10,8 @@ import torch
 from nerfstudio.data.scene_box import SceneBox
 from nerf2mesh.utils import Shading
 
+
 class Nerf2MeshField(Field):
-    ...
     def __init__(
         self,
         aabb: torch.Tensor,
@@ -44,7 +44,6 @@ class Nerf2MeshField(Field):
             interpolation="linear",
         )
 
-        #TODO: change in_dim and out_dim(remove self.geo_feat_dim) eventually
         self.sigma_net = MLP(
             in_dim=self.encoder.get_out_dim(),
             out_dim=1,
@@ -52,7 +51,7 @@ class Nerf2MeshField(Field):
             layer_width=hidden_dim_sigma,
             activation=torch.nn.ReLU(),
             out_activation=None,
-            implementation=implementation
+            implementation=implementation,
         )
         self.density_mlp = torch.nn.Sequential(self.encoder, self.sigma_net)
 
@@ -72,32 +71,40 @@ class Nerf2MeshField(Field):
             layer_width=hidden_dim_color,
             out_dim=3 + specular_dim,
             activation=torch.nn.ReLU(),
-            implementation=implementation
+            implementation=implementation,
         )
 
         self.specular_net = MLP(
-            in_dim=specular_dim + 3, num_layers=2, layer_width=32, out_dim=3,
-             activation=torch.nn.ReLU(),
-             implementation=implementation
+            in_dim=specular_dim + 3,
+            num_layers=2,
+            layer_width=32,
+            out_dim=3,
+            activation=torch.nn.ReLU(),
+            implementation=implementation,
         )
 
-    def forward(self, ray_samples: RaySamples, shading: Shading, compute_normals: bool = False, ) -> Dict[FieldHeadNames, Tensor]:
+    def forward(
+        self,
+        ray_samples: RaySamples,
+        shading: Shading,
+        compute_normals: bool = False,
+    ) -> Dict[FieldHeadNames, Tensor]:
         """Evaluates the field at points along the ray.
 
         Args:
             ray_samples: Samples to evaluate field on.
         """
         density, density_embedding = self.get_density(ray_samples)
-        
 
-        field_outputs = self.get_outputs(ray_samples, density_embedding=density_embedding, shading=shading)
+        field_outputs = self.get_outputs(
+            ray_samples, density_embedding=density_embedding, shading=shading
+        )
         # field_outputs = self.get_outputs(ray_samples, density_embedding=density_embedding)
         field_outputs[FieldHeadNames.DENSITY] = density  # type: ignore
-        
+
         return field_outputs
 
     def get_density(self, ray_samples: RaySamples) -> Tuple[Tensor, Optional[Tensor]]:
-
         positions = SceneBox.get_normalized_positions(
             ray_samples.frustums.get_positions(), self.aabb
         )
@@ -108,7 +115,7 @@ class Nerf2MeshField(Field):
         density = trunc_exp(h.to(positions))
         density = density * selector[..., None]
         return density, None
-    
+
     def _get_diffuse_color(self, x, c=None):
         h = self.encoder_color(x)
         h = torch.cat([x, h], dim=-1)
@@ -125,7 +132,10 @@ class Nerf2MeshField(Field):
         return torch.sigmoid(specular)
 
     def get_outputs(
-        self, ray_samples: RaySamples, shading: Shading, density_embedding: Tensor | None = None
+        self,
+        ray_samples: RaySamples,
+        shading: Shading,
+        density_embedding: Tensor | None = None,
     ) -> Dict[FieldHeadNames, Tensor]:
         outputs = {}
         positions = SceneBox.get_normalized_positions(
@@ -143,9 +153,8 @@ class Nerf2MeshField(Field):
             if shading == Shading.specular:
                 color = specular_feat
             else:
-        # add support for shading
                 color = (specular_feat + diffuse).clamp(0, 1)
-            outputs['specular'] = specular_feat
+            outputs["specular"] = specular_feat
 
         outputs[FieldHeadNames.RGB] = color
         return outputs

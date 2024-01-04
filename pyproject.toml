@@ -3,7 +3,16 @@ name = "nerf2mesh"
 description = "Nerf2Mesh implementation for NeRFStudio"
 version = "0.1.0"
 
-dependencies = ["nerfstudio >= 0.3.3", "torch", "torchvision", "tinycudann @ git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch", "pymeshlab", "PyMCubes", "trimesh"] 
+dependencies = [
+    "nerfstudio >= 0.3.3",
+    "torch",
+    "torchvision",
+    "tinycudann@git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch",
+    "pymeshlab",
+    "PyMCubes",
+    "trimesh",
+    "nvdiffrast@git+https://github.com/NVlabs/nvdiffrast/",
+]
 
 [tool.setuptools.packages.find]
 include = ["nerf2mesh*", "raymarching"]

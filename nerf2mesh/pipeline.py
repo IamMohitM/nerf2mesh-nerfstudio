@@ -1,5 +1,6 @@
 from typing import Type
 from dataclasses import dataclass, field
+import torch
 
 from nerfstudio.pipelines.dynamic_batch import VanillaPipelineConfig, VanillaPipeline
 from nerfstudio.utils import profiler
@@ -17,6 +18,10 @@ class Nerf2MeshPipelineConfig(VanillaPipelineConfig):
 class Nerf2MeshPipeline(VanillaPipeline):
     def __init__(self, config, *args, **kwargs):
         super().__init__(config, *args, **kwargs)
+        #NOTE: assumes all height, fy, width, fx are the same for all cameras
+        self.model.mvps = torch.cat([self.datamanager.train_dataset.metadata["mvps"], self.datamanager.eval_dataset.metadata["mvps"]], dim=0)
+        self.model.image_height = self.datamanager.train_dataset.cameras.image_height[0].item()
+        self.model.image_width = self.datamanager.train_dataset.cameras.image_width[0].item()
 
     
     @profiler.time_function
