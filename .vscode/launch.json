@@ -23,19 +23,50 @@
                 "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
                 "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
                 "TORCH_EXTENSIONS_DIR": "temp/torch_extensions",
-                "CUDA_VISIBLE_DEVICES": "1"
+                "CUDA_VISIBLE_DEVICES": "0"
             },
             "args": [
                 "nerf2mesh",
                 "--output-dir",
-                "outputs/chair/nerf2mesh",
+                "outputs/chair+mesh/nerf2mesh",
                 "--machine.seed",
                 "10",
+                "--pipeline.model.coarse-mesh-path",
+                "outputs/chair+mesh/nerf2mesh/meshes",
                 "--project_name=nerf2mesh_nerfstudio",
                 "--experiment_name=chair",
                 "--vis=viewer",
                 "--data",
                 "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/transforms_train.json",
+            ]
+            
+        },
+        {
+            "name": "Train ship",
+            "type": "python",
+            "request": "launch",
+            "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
+                "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
+                "TORCH_EXTENSIONS_DIR": "temp/torch_extensions",
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "args": [
+                "nerf2mesh",
+                "--output-dir",
+                "outputs/ship/nerf2mesh",
+                "--machine.seed",
+                "10",
+                "--pipeline.model.coarse-mesh-path",
+                "outputs/ship/nerf2mesh/meshes",
+                "--project_name=nerf2mesh_nerfstudio",
+                "--experiment_name=chair",
+                "--vis=viewer",
+                "--data",
+                "~/datasets/nerf_synthetic_small/nerf_synthetic/ship/transforms_train.json",
             ]
             
         },
