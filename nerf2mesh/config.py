@@ -4,14 +4,13 @@ from nerfstudio.engine.optimizers import AdamOptimizerConfig
 from nerfstudio.data.datamanagers.base_datamanager import (
     VanillaDataManagerConfig,
 )
-# from nerfstudio.data.dataparsers.instant_ngp_dataparser import InstantNGPDataParserConfig
 from nerf2mesh.dataparser import Nerf2MeshDataParserConfig
 from nerf2mesh.pipeline import Nerf2MeshPipelineConfig
 from nerf2mesh.nerf2mesh import Nerf2MeshModelConfig
 from nerf2mesh.scheduler import Nerf2MeshSchedulerConfig
 
 
-max_num_iterations = 5000
+max_num_iterations = 10000
 
 nerf2mesh = MethodSpecification(
     config=TrainerConfig(
@@ -23,8 +22,8 @@ nerf2mesh = MethodSpecification(
         pipeline=Nerf2MeshPipelineConfig(
             datamanager=VanillaDataManagerConfig(
                 dataparser=Nerf2MeshDataParserConfig(),
-                train_num_rays_per_batch=4096,
-                eval_num_rays_per_batch=4096,
+                train_num_rays_per_batch=8192,
+                eval_num_rays_per_batch=8192,
             ),
             model=Nerf2MeshModelConfig(eval_num_rays_per_chunk=8192),
         ),

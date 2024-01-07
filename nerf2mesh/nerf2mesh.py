@@ -6,7 +6,6 @@ import tqdm
 import trimesh
 import mcubes
 import numpy as np
-import raymarching
 import nerfacc
 import nvdiffrast.torch as dr
 
@@ -96,7 +95,7 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     visibility_mask_dilation: int = 5
     sdf: bool = False
     mvps: torch.tensor = None
-
+    mark_unseen_triangles: bool = False
 
 #     # NOTE: all default configs are passed to nerf2mesh field
 #     # NOTE: all dervied are computed in nerf2mesh field
@@ -335,12 +334,7 @@ class Nerf2MeshModel(NGPModel):
         sigmas = torch.zeros([resolution] * 3, dtype=torch.float32, device=self.device)
 
         if resolution == self.config.grid_resolution:
-            # re-map from morton code to regular coords...
-            all_indices = torch.arange(
-                resolution**3, device=self.device, dtype=torch.int
-            )
-            all_coords = raymarching.morton3D_invert(all_indices).long()
-            sigmas[tuple(all_coords.T)] = self.density_grid[0]
+            sigmas = self.occupancy_grid.occs.view_as(sigmas)
         else:
             # query
 
@@ -371,13 +365,7 @@ class Nerf2MeshModel(NGPModel):
                     dtype=torch.float32,
                     device=self.device,
                 )
-                all_indices = torch.arange(
-                    self.config.grid_resolution**3,
-                    device=self.device,
-                    dtype=torch.int,
-                )
-                all_coords = raymarching.morton3D_invert(all_indices).long()
-                mask[tuple(all_coords.T)] = self.occupancy_grid.occs
+                mask= self.occupancy_grid.occs.view_as(mask)
                 mask = (
                     F.interpolate(
                         mask.unsqueeze(0).unsqueeze(0),
@@ -403,7 +391,7 @@ class Nerf2MeshModel(NGPModel):
         triangles = triangles.astype(np.int32)
 
         ### visibility test.
-        if self.mvps is not None:
+        if self.config.mark_unseen_triangles and self.mvps is not None:
             visibility_mask = (
                 self.mark_unseen_triangles(
                     vertices, triangles, self.mvps, self.image_height, self.image_width
@@ -435,7 +423,8 @@ class Nerf2MeshModel(NGPModel):
             )
 
         mesh = trimesh.Trimesh(vertices, triangles, process=False)
-        mesh.export(os.path.join(save_path))
+        os.makedirs(save_path, exist_ok=True)
+        mesh.export(os.path.join(save_path, 'mesh_0.ply'))
 
         # for the outer mesh [1, inf]
         if self.bound > 1:
@@ -518,7 +507,7 @@ class Nerf2MeshModel(NGPModel):
                     f"(x <= {xmn}) || (x >= {xmx}) || (y <= {ymn}) || (y >= {ymx}) || (z <= {zmn} ) || (z >= {zmx})",
                 )
 
-                if self.mvps is not None:
+                if self.config.mark_unseen_triangles and self.mvps is not None:
                     visibility_mask = (
                         self.mark_unseen_triangles(
                             vertices_out,
@@ -548,6 +537,7 @@ class Nerf2MeshModel(NGPModel):
                 mesh_out.export(os.path.join(save_path, f"mesh_1.ply"))
 
             else:
+                #TODO: fix this - density grid and morton code should not be used
                 reso = self.config.grid_resolution
                 target_reso = self.config.env_reso
                 decimate_target //= 2  # empirical...
@@ -555,7 +545,7 @@ class Nerf2MeshModel(NGPModel):
                 all_indices = torch.arange(
                     reso**3, device=self.device, dtype=torch.int
                 )
-                all_coords = raymarching.morton3D_invert(all_indices).cpu().numpy()
+                # all_coords = raymarching.morton3D_invert(all_indices).cpu().numpy()
 
                 # for each cas >= 1
                 for cas in range(1, self.cascade):
@@ -569,7 +559,7 @@ class Nerf2MeshModel(NGPModel):
                     occ[tuple(all_coords.T)] = self.density_grid[cas]
 
                     # remove the center (before mcubes)
-                    # occ[reso // 4 : reso * 3 // 4, reso // 4 : reso * 3 // 4, reso // 4 : reso * 3 // 4] = 0
+                    # occ[reso // 4 : reso * 3 // 4, reso // 4 : r  eso * 3 // 4, reso // 4 : reso * 3 // 4] = 0
 
                     # interpolate the occ grid to desired resolution to control mesh size...
                     occ = (
