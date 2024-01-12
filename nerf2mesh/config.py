@@ -31,6 +31,10 @@ nerf2mesh = MethodSpecification(
             "fields": {
                 "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
                 "scheduler": Nerf2MeshSchedulerConfig(max_steps=max_num_iterations),
+            },
+            "vertices_offsets":
+            {
+                "optimizer": AdamOptimizerConfig(lr=1e-4, eps=1e-15, weight_decay=0),
             }
         },
         vis="viewer",

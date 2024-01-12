@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-import numpy as np
 from typing import Type
 from nerfstudio.data.dataparsers.instant_ngp_dataparser import (
     InstantNGPDataParserConfig,

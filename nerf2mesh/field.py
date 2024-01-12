@@ -1,15 +1,55 @@
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Type
+from enum import Enum
+
+from dataclasses import dataclass, field
 from nerfstudio.cameras.rays import RaySamples
 from nerfstudio.field_components.field_heads import FieldHeadNames
-from nerfstudio.fields.base_field import Field, get_normalized_directions
+from nerfstudio.fields.base_field import Field, get_normalized_directions, FieldConfig
 from nerfstudio.field_components.activations import trunc_exp
-from torch import Tensor
 from nerfstudio.field_components.encodings import HashEncoding
 from nerfstudio.field_components.mlp import MLP
+from nerfstudio.utils.rich_utils import CONSOLE
+
+from torch import Tensor
+from torch.nn import functional as F
 import torch
 from nerfstudio.data.scene_box import SceneBox
 from nerf2mesh.utils import Shading
+import nvdiffrast.torch.ops as dr
+import numpy as np
 
+import trimesh
+
+
+def scale_img_nhwc(x: torch.tensor, size: Tuple, mag="bilinear", min="bilinear"):
+    assert (x.shape[1] >= size[0] and x.shape[2] >= size[1]) or (
+        x.shape[1] < size[0] and x.shape[2] < size[1]
+    ), "Trying to magnify image in one dimension and minify in the other"
+    y = x.permute(0, 3, 1, 2)  # NHWC -> NCHW
+    if (
+        x.shape[1] > size[0] and x.shape[2] > size[1]
+    ):  # Minification, previous size was bigger
+        y = torch.nn.functional.interpolate(y, size, mode=min)
+    else:  # Magnification
+        if mag == "bilinear" or mag == "bicubic":
+            y = torch.nn.functional.interpolate(y, size, mode=mag, align_corners=True)
+        else:
+            y = torch.nn.functional.interpolate(y, size, mode=mag)
+    return y.permute(0, 2, 3, 1).contiguous()  # NCHW -> NHWC
+
+def scale_img_hwc(x, size, mag="bilinear", min="bilinear"):
+    return scale_img_nhwc(x[None, ...], size, mag, min)[0]
+
+def scale_img_hw(x, size, mag="bilinear", min="bilinear"):
+    return scale_img_nhwc(x[None, ..., None], size, mag, min)[0, ..., 0]
+
+class Nerf2MeshFieldHeadNames(Enum):
+    RGB = "rgb"
+    DENSITY = "density"
+    SPECULAR = "specular"
+    DEPTH = "depth"
+    WEIGHTS_SUM = "weights_sum"
+    IMAGE = "image"
 
 class Nerf2MeshField(Field):
     def __init__(
@@ -27,7 +67,6 @@ class Nerf2MeshField(Field):
         max_res: int,
         log2_hashmap_size: int,
         implementation: str = "tcnn",
-        **kwargs
     ) -> None:
         # super().__init__(aabb = aabb, base_res=base_res, max_res=max_res, log2_hashmap_size = log2_hashmap_size, **kwargs)
         super().__init__()
@@ -88,7 +127,7 @@ class Nerf2MeshField(Field):
         ray_samples: RaySamples,
         shading: Shading,
         compute_normals: bool = False,
-    ) -> Dict[FieldHeadNames, Tensor]:
+    ) -> Dict[Nerf2MeshFieldHeadNames, Tensor]:
         """Evaluates the field at points along the ray.
 
         Args:
@@ -100,7 +139,7 @@ class Nerf2MeshField(Field):
             ray_samples, density_embedding=density_embedding, shading=shading
         )
         # field_outputs = self.get_outputs(ray_samples, density_embedding=density_embedding)
-        field_outputs[FieldHeadNames.DENSITY] = density  # type: ignore
+        field_outputs[Nerf2MeshFieldHeadNames.DENSITY] = density  # type: ignore
 
         return field_outputs
 
@@ -136,7 +175,7 @@ class Nerf2MeshField(Field):
         ray_samples: RaySamples,
         shading: Shading,
         density_embedding: Tensor | None = None,
-    ) -> Dict[FieldHeadNames, Tensor]:
+    ) -> Dict[Nerf2MeshFieldHeadNames, Tensor]:
         outputs = {}
         positions = SceneBox.get_normalized_positions(
             ray_samples.frustums.get_positions(), self.aabb
@@ -154,7 +193,194 @@ class Nerf2MeshField(Field):
                 color = specular_feat
             else:
                 color = (specular_feat + diffuse).clamp(0, 1)
-            outputs["specular"] = specular_feat
+            outputs[Nerf2MeshFieldHeadNames.SPECULAR] = specular_feat
 
-        outputs[FieldHeadNames.RGB] = color
+        outputs[Nerf2MeshFieldHeadNames.RGB] = color
         return outputs
+
+class Nerf2MeshFieldStage1(Field):
+
+    def __init__(
+            self,
+            prev_field: Nerf2MeshField,
+            mesh_path: str,
+            super_sample: int = 2,
+            pos_gradient_boost: int = 1
+    ):
+        super().__init__()
+        
+        self.prev_field = prev_field
+        self.mesh_path = mesh_path
+        self.glctx = dr.RasterizeGLContext(output_db=False)
+        self.super_sample = super_sample
+        self.pos_gradient_boost = pos_gradient_boost
+
+        vertices = []
+        triangles = []
+        v_cum_sum = [0]
+        f_cumsum = [0]
+
+        # TODO: this will change - we now use a fixed coarse mesh path
+        # However, when we have multiple grid levels, there will be a mesh for each grid
+        # Therefore, this needs to be updated to load the correct mesh for each grid level
+        # assumming one grid level
+        for cas in range(self.config.grid_levels):
+            mesh = trimesh.load(
+                self.mesh_path,
+                force="mesh",
+                process=False,
+                skip_materials=True,
+            )
+            vertices.append(mesh.vertices)
+            triangles.append(mesh.faces + v_cum_sum[-1])
+            v_cum_sum.append(v_cum_sum[-1] + len(mesh.vertices))
+            f_cumsum.append(f_cumsum[-1] + len(mesh.faces))
+
+        vertices = np.concatenate(vertices, axis=0)
+        triangles = np.concatenate(triangles, axis=0)
+        self.v_cum_sum = np.array(v_cum_sum)
+        self.f_cumsum = np.array(f_cumsum)
+
+        self.vertices = torch.from_numpy(vertices).float().to(self.device)
+        self.triangles = torch.from_numpy(triangles).long().to(self.device)
+
+        # these will be trained
+        self.vertices_offsets = torch.nn.Parameter(
+            torch.zeros_like(self.vertices, dtype=torch.float32)
+        ).to(self.device)
+
+        self.triangle_errors = torch.nn.Parameter(
+            torch.zeros_like(self.triangles[:, 0], dtype=torch.float32)
+        ).to(self.device)
+        self.triangle_errors_cnt = torch.zeros_like(
+            self.triangles[:, 0], dtype=torch.float32
+        ).to(self.device)
+        self.triangles_errors_id = None
+
+        CONSOLE.print(
+            f"Loaded coarse mesh: vertices - {self.vertices.shape}, triangles - {self.triangles.shape}"
+        )
+
+    def forward(self, ray_samples: RaySamples, compute_normals: bool = False) -> Dict[Nerf2MeshFieldHeadNames, Tensor]:
+        
+        field_outputs = self.get_outputs(ray_samples)
+        # field_outputs[FieldHeadNames.DENSITY] = density
+
+        return field_outputs
+
+    def get_outputs(
+        self,
+        ray_samples: RaySamples,
+        height: int, #TODO: add these parameters
+        width: int, #TODO: add these parameters,
+        mvp: Tensor,
+        # bg_color: str = 
+    ) -> Dict[Nerf2MeshFieldHeadNames, Tensor]:
+        directions = ray_samples.frustums.directions
+        prefix = directions.shape[:-1]
+
+        if self.config.super_sample > 1:
+            H = int(height * self.config.super_sample)
+            W = int(width * self.config.super_sample)
+
+            dirs = directions.view(height, width, 3)
+            dirs = scale_img_hwc(dirs, (H, W), mag="nearest").view(-1, 3).contiguous()
+        else:
+            H, W = height, width
+            dirs = directions.view(-1, 3).contiguous()
+
+        dirs = get_normalized_directions(dirs) 
+
+        
+        results = {}
+
+        vertices = self.vertices + self.vertices_offsets
+        vertices_clip = torch.matmul(
+            F.pad(vertices, (0, 1), "constant", 1.0), mvp.transpose(1, 2),
+            torch.transpose(mvp, 0, 1),
+        ).float().unsqueeze(0)
+
+        rast, _ = dr.rasterize(self.glctx, vertices_clip, self.triangles, (height, width))
+
+        xyzs, _ = dr.interpolate(
+            vertices.unsqueeze(0), rast, self.triangles
+        )  # [1, H, W, 3]
+        mask, _ = dr.interpolate(
+            torch.ones_like(vertices[:, :1]).unsqueeze(0), rast, self.triangles
+        )  # [1, H, W, 1]
+        mask_flatten = (mask > 0).view(-1).detach()
+        xyzs = xyzs.view(-1, 3)
+
+        #TODO: add contraction support for unbounded scenes
+        # if self.opt.contract:
+        #     xyzs = contract(xyzs)
+
+        rgbs = torch.zeros(H * W, 3, device=self.device, dtype=torch.float32)
+
+
+        if mask_flatten.any():
+            diffuse_feat = self.prev_field._get_diffuse_color(xyzs[mask_flatten] if self.enable_offset_nerf_grad else xyzs[mask_flatten].detach())
+            diffuse = diffuse_feat[..., :3]
+            specular_feat = self.prev_field._get_specular_color(dirs[mask_flatten], diffuse_feat)
+            color = (specular_feat + diffuse).clamp(0, 1)
+            # outputs[Nerf2MeshFieldHeadNames.SPECULAR] = specular_feat
+            mask_rgb = color
+        
+        rgbs[mask_flatten] = mask_rgb.float()
+
+        rgbs = rgbs.view(1, height, width, 3)
+        alphas = mask.float()
+
+        alphas = (
+            dr.antialias(
+                alphas,
+                rast,
+                vertices_clip,
+                self.triangles,
+                pos_gradient_boost=self.pos_gradient_boost,
+            )
+            .squeeze(0)
+            .clamp(0, 1)
+        )
+        rgbs = (
+            dr.antialias(
+                rgbs,
+                rast,
+                vertices_clip,
+                self.triangles,
+                pos_gradient_boost=self.pos_gradient_boost,
+            )
+            .squeeze(0)
+            .clamp(0, 1)
+        )
+
+        image = alphas * rgbs
+        depth = alphas * rast[0, :, :, [2]]
+        T = 1 - alphas
+
+        # trig_id for updating trig errors - triangle_id is offseted by 1 in nvdiffrast
+        trig_id = rast[0, :, :, -1] - 1  # [h, w]
+
+        # ssaa
+        if self.super_sample > 1:
+            image = scale_img_hwc(image, (height, width))
+            depth = scale_img_hwc(depth, (height, width))
+            T = scale_img_hwc(T, (height, width))
+            trig_id = scale_img_hw(
+                trig_id.float(), (height, width), mag="nearest", min="nearest"
+            )
+
+        self.triangles_errors_id = trig_id
+
+        #TODO: check if bg color is needed
+        # image = image + T * bg_color
+
+        image = image.view(*prefix, 3)
+        depth = depth.view(*prefix)
+
+        results[Nerf2MeshFieldHeadNames.DEPTH] = depth
+        results[Nerf2MeshFieldHeadNames.IMAGE] = image
+        results[Nerf2MeshFieldHeadNames.WEIGHTS_SUM] = 1 - T
+
+        return results
+
