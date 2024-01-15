@@ -43,11 +43,15 @@ from nerf2mesh.utils import (
     remove_selected_verts,
     decimate_mesh,
     uncontract,
-    laplacian_smooth_loss
+    laplacian_smooth_loss,
+    contract,
 )
 
 import cv2
 import json
+from scipy.ndimage import binary_dilation, binary_erosion
+import xatlas
+from sklearn.neighbors import NearestNeighbors
 
 
 @dataclass
@@ -105,6 +109,7 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     sdf: bool = False
     mvps: torch.tensor = None
     mark_unseen_triangles: bool = False
+    contract: bool = False
 
     #     # NOTE: all default configs are passed to nerf2mesh field
     #     # NOTE: all dervied are computed in nerf2mesh field
@@ -113,8 +118,10 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     stage: int = 0
     enable_offset_nerf_grad: bool = False
 
-    lambda_lap: float = 0.001
-    lambda_offsets : float = 0.1
+    lambda_lap: float = 0  # 0.001
+    lambda_offsets: float = 0.1
+    fine_mesh_path: str = "meshes/stage_1"
+    texture_size: float = 4096
 
 
 class Nerf2MeshModel(NGPModel):
@@ -159,14 +166,6 @@ class Nerf2MeshModel(NGPModel):
                 (self.scene_aabb[3:] - self.scene_aabb[:3]) ** 2
             ).sum().sqrt().item() / 1000
 
-        self.occupancy_grid = nerfacc.OccGridEstimator(
-            roi_aabb=self.scene_aabb,
-            resolution=self.config.grid_resolution,
-            levels=self.config.grid_levels,
-        )
-
-        
-
         self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
 
         self.renderer_accumulation = AccumulationRenderer()
@@ -180,9 +179,14 @@ class Nerf2MeshModel(NGPModel):
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
 
         if self.config.stage == 0:
+            self.occupancy_grid = nerfacc.OccGridEstimator(
+                roi_aabb=self.scene_aabb,
+                resolution=self.config.grid_resolution,
+                levels=self.config.grid_levels,
+            )
             self.sampler = VolumetricSampler(
-            occupancy_grid=self.occupancy_grid, density_fn=self.field.density_fn
-        )
+                occupancy_grid=self.occupancy_grid, density_fn=self.field.density_fn
+            )
 
         if self.config.stage == 1:
             self.field_2 = Nerf2MeshFieldStage1(
@@ -195,22 +199,39 @@ class Nerf2MeshModel(NGPModel):
     def get_training_callbacks(
         self, training_callback_attributes: TrainingCallbackAttributes
     ) -> List[TrainingCallback]:
-        callbacks = super().get_training_callbacks(training_callback_attributes)
+        if self.config.stage == 0:
+            callbacks = super().get_training_callbacks(training_callback_attributes)
 
-        def export_coarse_mesh(step: int):
-            self.export_stage0(
-                resolution=512,
-                decimate_target=3e5,
-                S=self.config.grid_resolution,
-            )
+            def export_coarse_mesh(step: int):
+                self.export_stage0(
+                    resolution=512,
+                    decimate_target=3e5,
+                    S=self.config.grid_resolution,
+                )
 
-        callbacks.append(
-            TrainingCallback(
-                where_to_run=[TrainingCallbackLocation.AFTER_TRAIN],
-                # update_every_num_iters=1,
-                func=export_coarse_mesh,
+            callbacks.append(
+                TrainingCallback(
+                    where_to_run=[TrainingCallbackLocation.AFTER_TRAIN],
+                    # update_every_num_iters=1,
+                    func=export_coarse_mesh,
+                )
             )
-        )
+        elif self.config.stage == 1:
+            callbacks = []
+            def export_fine_mesh(step: int):
+                self.export_stage1(
+                    path=self.config.fine_mesh_path,
+                    h0=self.config.texture_size,
+                    w0=self.config.texture_size,
+                )
+
+            callbacks.append(
+                TrainingCallback(
+                    where_to_run=[TrainingCallbackLocation.AFTER_TRAIN],
+                    # update_every_num_iters=1,
+                    func=export_fine_mesh,
+                )
+            )
         return callbacks
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
@@ -281,16 +302,14 @@ class Nerf2MeshModel(NGPModel):
                 "num_samples_per_ray": packed_info[:, 1],
                 "specular_rgb": specular,
                 "specular": field_outputs.get(Nerf2MeshFieldHeadNames.SPECULAR),
-        }
+            }
 
         if self.config.stage == 1:
             self.current_image = ray_bundle.camera_indices[0].squeeze(0)
             with torch.no_grad():
                 ray_bundle.nears = self.config.min_near
                 ray_bundle.fars = self.config.max_far
-                ray_samples = self.sampler(
-                    ray_bundle=ray_bundle, num_samples = 1
-                )
+                ray_samples = self.sampler(ray_bundle=ray_bundle, num_samples=1)
             field_outputs = self.field_2(
                 ray_samples=ray_samples,
                 height=self.image_height,
@@ -299,17 +318,17 @@ class Nerf2MeshModel(NGPModel):
             )
 
             outputs = {
-                "rgb": field_outputs[Nerf2MeshFieldHeadNames.RGB].view(self.image_height, self.image_width, -1),    
+                "rgb": field_outputs[Nerf2MeshFieldHeadNames.RGB].view(
+                    self.image_height, self.image_width, -1
+                ),
                 "accumulation": field_outputs[Nerf2MeshFieldHeadNames.ACCUMULATION],
-            } 
-            
+            }
 
         # the diff between weights and accumuation
         # weights is individual weight of each point considered on each ray
         # accumulation is the sum of weights of all points considered on each ray
         # therefore, accumulation shape will be equal to number of rays
 
-        
         return outputs
 
     @torch.no_grad()
@@ -362,17 +381,21 @@ class Nerf2MeshModel(NGPModel):
         )
 
         # pred_rgb = pred_rgb.view(-1, 3)
-        
-        if self.config.stage == 0:  
-            loss = self.config.lambda_rgb * self.rgb_loss(pred_rgb.view(-1, 3), image.view(-1, 3)).mean(-1)
+
+        if self.config.stage == 0:
+            loss = self.config.lambda_rgb * self.rgb_loss(
+                pred_rgb.view(-1, 3), image.view(-1, 3)
+            ).mean(-1)
         elif self.config.stage == 1:
-            loss = self.config.lambda_rgb * self.rgb_loss(pred_rgb.view(-1, 3), image[self.current_image].view(-1, 3)).mean(-1)
+            loss = self.config.lambda_rgb * self.rgb_loss(
+                pred_rgb.view(-1, 3), image[self.current_image].view(-1, 3)
+            ).mean(-1)
 
         if self.config.lambda_mask > 0 and batch["image"].size(-1) > 3:
             if self.config.stage == 0:
                 gt_mask = batch["image"][..., 3:].to(self.device)
             elif self.config.stage == 1:
-                gt_mask = batch['image'][self.current_image, ..., 3:].to(self.device)
+                gt_mask = batch["image"][self.current_image, ..., 3:].to(self.device)
             pred_mask = outputs["accumulation"]
             loss += self.config.lambda_mask * self.rgb_loss(
                 pred_mask.view(-1), gt_mask.view(-1)
@@ -386,20 +409,29 @@ class Nerf2MeshModel(NGPModel):
 
         if self.config.stage == 1:
             if self.config.lambda_lap > 0:
-                loss_lap = laplacian_smooth_loss(self.field_2.vertices + self.field_2.vertices_offsets, self.field_2.triangles)
+                loss_lap = laplacian_smooth_loss(
+                    self.field_2.vertices + self.field_2.vertices_offsets,
+                    self.field_2.triangles,
+                )
                 loss = loss + self.config.lambda_lap * loss_lap
             if self.config.lambda_offsets > 0:
                 if self.bound > 1:
-                    abs_offsets_inner = self.field_2.vertices_offsets[:self.field_2.v_cumsum[1]].abs()
-                    abs_offsets_outer = self.field_2.vertices_offsets[self.field_2.v_cumsum[1]:].abs()
+                    abs_offsets_inner = self.field_2.vertices_offsets[
+                        : self.field_2.v_cumsum[1]
+                    ].abs()
+                    abs_offsets_outer = self.field_2.vertices_offsets[
+                        self.field_2.v_cumsum[1] :
+                    ].abs()
                 else:
                     abs_offsets_inner = self.field_2.vertices_offsets.abs()
-                loss_offsets = (abs_offsets_inner ** 2).sum(-1).mean()
+                loss_offsets = (abs_offsets_inner**2).sum(-1).mean()
 
                 if self.bound > 1:
                     # loss_offsets = loss_offsets + torch.where(abs_offsets_outer > 0.02, abs_offsets_outer * 100, abs_offsets_outer * 0.01).sum(-1).mean()
-                    loss_offsets = loss_offsets + 0.1 * (abs_offsets_outer ** 2).sum(-1).mean()
-                
+                    loss_offsets = (
+                        loss_offsets + 0.1 * (abs_offsets_outer**2).sum(-1).mean()
+                    )
+
                 loss = loss + self.config.lambda_offsets * loss_offsets
 
         loss_dict = {"rgb_loss": loss.mean()}
@@ -481,7 +513,11 @@ class Nerf2MeshModel(NGPModel):
         if self.config.mark_unseen_triangles and self.all_mvps is not None:
             visibility_mask = (
                 self.mark_unseen_triangles(
-                    vertices, triangles, self.all_mvps, self.image_height, self.image_width
+                    vertices,
+                    triangles,
+                    self.all_mvps,
+                    self.image_height,
+                    self.image_width,
                 )
                 .cpu()
                 .numpy()
@@ -799,6 +835,8 @@ class Nerf2MeshModel(NGPModel):
         # png_compression_level: 0 is no compression, 9 is max (default will be 3)
 
         device = self.field_2.vertices.device
+        if self.glctx is None:
+            self.glctx = dr.RasterizeGLContext(output_db=False)
 
         def _export_obj(v, f, h0, w0, ssaa=1, cas=0):
             # v, f: torch Tensor
@@ -812,7 +850,7 @@ class Nerf2MeshModel(NGPModel):
 
             # unwrap uv in contracted space
             atlas = xatlas.Atlas()
-            atlas.add_mesh(contract(v_np) if self.opt.contract else v_np, f_np)
+            atlas.add_mesh(contract(v_np) if self.config.contract else v_np, f_np)
             chart_options = xatlas.ChartOptions()
             chart_options.max_iterations = 0  # disable merge_chart for faster unwrap...
             pack_options = xatlas.PackOptions()
@@ -851,7 +889,8 @@ class Nerf2MeshModel(NGPModel):
             xyzs = xyzs.view(-1, 3)
             mask = (mask > 0).view(-1)
 
-            if self.opt.contract:
+            # TODO: add contract support
+            if self.config.contract:
                 xyzs = contract(xyzs)
 
             feats = torch.zeros(h * w, 6, device=device, dtype=torch.float32)
@@ -860,19 +899,22 @@ class Nerf2MeshModel(NGPModel):
                 xyzs = xyzs[mask]  # [M, 3]
 
                 # check individual codes
-                if self.individual_dim > 0:
-                    ind_code = self.individual_codes[[0]]
-                else:
-                    ind_code = None
+                # if self.config.individual_dim > 0:
+                #     ind_code = self.individual_codes[[0]]
+                # else:
+                #     ind_code = None
+                ind_code = None
 
                 # batched inference to avoid OOM
                 all_feats = []
                 head = 0
                 while head < xyzs.shape[0]:
                     tail = min(head + 640000, xyzs.shape[0])
-                    with torch.cuda.amp.autocast(enabled=self.opt.fp16):
+                    with torch.cuda.amp.autocast(enabled=True):
                         all_feats.append(
-                            self.geo_feat(xyzs[head:tail], ind_code).float()
+                            self.field._get_diffuse_color(
+                                xyzs[head:tail], ind_code
+                            ).float()
                         )
                     head += 640000
 
@@ -917,6 +959,7 @@ class Nerf2MeshModel(NGPModel):
                 feats0 = cv2.resize(feats0, (w0, h0), interpolation=cv2.INTER_LINEAR)
                 feats1 = cv2.resize(feats1, (w0, h0), interpolation=cv2.INTER_LINEAR)
 
+            os.makedirs(path, exist_ok=True)
             # cv2.imwrite(os.path.join(path, f'feat0_{cas}.png'), feats0, [int(cv2.IMWRITE_PNG_COMPRESSION), png_compression_level])
             # cv2.imwrite(os.path.join(path, f'feat1_{cas}.png'), feats1, [int(cv2.IMWRITE_PNG_COMPRESSION), png_compression_level])
             cv2.imwrite(os.path.join(path, f"feat0_{cas}.jpg"), feats0)
@@ -955,21 +998,24 @@ class Nerf2MeshModel(NGPModel):
                 fp.write(f"Ns 0 \n")
                 fp.write(f"map_Kd feat0_{cas}.jpg \n")
 
-        v = (self.vertices + self.vertices_offsets).detach()
-        f = self.triangles.detach()
+        v = (self.field_2.vertices + self.field_2.vertices_offsets).detach()
+        f = self.field_2.triangles.detach()
 
-        for cas in range(self.cascade):
-            cur_v = v[self.v_cumsum[cas] : self.v_cumsum[cas + 1]]
-            cur_f = f[self.f_cumsum[cas] : self.f_cumsum[cas + 1]] - self.v_cumsum[cas]
-            _export_obj(cur_v, cur_f, h0, w0, self.opt.ssaa, cas)
+        for cas in range(self.config.grid_levels):
+            cur_v = v[self.field_2.v_cum_sum[cas] : self.field_2.v_cum_sum[cas + 1]]
+            cur_f = (
+                f[self.field_2.f_cumsum[cas] : self.field_2.f_cumsum[cas + 1]]
+                - self.field_2.v_cum_sum[cas]
+            )
+            _export_obj(cur_v, cur_f, h0, w0, self.field_2.super_sample, cas)
 
             # half the texture resolution for remote area.
-            if not self.opt.sdf and h0 > 2048 and w0 > 2048:
-                h0 //= 2
-                w0 //= 2
+            # if not self.opt.sdf and h0 > 2048 and w0 > 2048:
+            #     h0 //= 2
+            #     w0 //= 2
 
         # save mlp as json
-        params = dict(self.specular_net.named_parameters())
+        params = dict(self.field.specular_net.named_parameters())
 
         mlp = {}
         for k, p in params.items():
@@ -978,7 +1024,7 @@ class Nerf2MeshModel(NGPModel):
             mlp[k] = p_np.tolist()
 
         mlp["bound"] = self.bound
-        mlp["cascade"] = self.cascade
+        mlp["cascade"] = self.config.grid_levels
 
         mlp_file = os.path.join(path, f"mlp.json")
         with open(mlp_file, "w") as fp:

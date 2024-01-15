@@ -8,6 +8,15 @@ class Shading(Enum):
     specular = 2
     full = 3
 
+def contract(xyzs):
+    if isinstance(xyzs, np.ndarray):
+        mag = np.max(np.abs(xyzs), axis=1, keepdims=True)
+        xyzs = np.where(mag <= 1, xyzs, xyzs * (2 - 1 / mag) / mag)
+    else:
+        mag = torch.amax(torch.abs(xyzs), dim=1, keepdim=True)
+        xyzs = torch.where(mag <= 1, xyzs, xyzs * (2 - 1 / mag) / mag)
+    return xyzs
+
 def laplacian_uniform(verts, faces):
     """
     Compute the uniform laplacian
