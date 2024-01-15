@@ -12,11 +12,14 @@ class AllPixelSampler(PixelSampler):
     config: AllPixelSamplerConfig
 
     def sample(self, image_batch: Dict):
+        """
+        Samples all pixels in the image. The image is selected randomly from the batch.
+        """
         device = image_batch["image"][0].device
         num_images, image_height, image_width, _ = image_batch["image"].shape
 
         image_index = torch.randint(num_images, (1,), device=device)
-        i, j= torch.meshgrid(
+        i, j= torch.meshgrid(   
             torch.arange(image_height, device=device),
             torch.arange(image_width, device=device),
         )
