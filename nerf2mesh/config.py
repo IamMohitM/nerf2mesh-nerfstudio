@@ -1,7 +1,8 @@
 from nerfstudio.plugins.types import MethodSpecification #@IgnoreException
-from nerfstudio.engine.trainer import TrainerConfig
+# from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.engine.optimizers import AdamOptimizerConfig
 
+from nerf2mesh.trainer import Nerf2MeshTrainerConfig
 from nerf2mesh.datamanager import Nerf2MeshDataManagerConfig
 from nerf2mesh.dataparser import Nerf2MeshDataParserConfig
 from nerf2mesh.pipeline import Nerf2MeshPipelineConfig
@@ -12,7 +13,7 @@ from nerf2mesh.scheduler import Nerf2MeshSchedulerConfig
 max_num_iterations = 10000
 
 nerf2mesh = MethodSpecification(
-    config=TrainerConfig(
+    config=Nerf2MeshTrainerConfig(
         method_name="nerf2mesh",
         steps_per_eval_batch=500,
         steps_per_save=2000,

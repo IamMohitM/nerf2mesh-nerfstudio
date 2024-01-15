@@ -9,13 +9,13 @@ import torch
 
 @dataclass
 class Nerf2MeshDataParserConfig(InstantNGPDataParserConfig):
-    _target: Type = field(default_factory=lambda: Nerf2Mesh)
+    _target: Type = field(default_factory=lambda: Nerf2MeshDataParser)
     min_near: float = 0.01
     max_far: float = 1000.0
 
 
 @dataclass
-class Nerf2Mesh(InstantNGP):
+class Nerf2MeshDataParser(InstantNGP):
     config: Nerf2MeshDataParserConfig
 
     def _generate_dataparser_outputs(self, split="train"):

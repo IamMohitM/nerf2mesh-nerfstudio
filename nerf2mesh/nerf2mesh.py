@@ -1040,3 +1040,396 @@ class Nerf2MeshModel(NGPModel):
         elif self.config.stage == 1:
             metrics_dict["psnr"] = self.psnr(outputs["rgb"], image[self.current_image])
         return metrics_dict
+
+
+@dataclass
+class Nerf2MeshStage1ModelConfig(Nerf2MeshModelConfig):
+    _target: Type = field(default_factory=lambda: Nerf2MeshStage1Model)
+    stage: int = 0
+    enable_offset_nerf_grad: bool = False
+    stage: int = 1
+    lambda_lap: float = 0  # 0.001
+    lambda_offsets: float = 0.1
+    fine_mesh_path: str = "meshes/stage_1"
+    texture_size: float = 4096
+
+class Nerf2MeshStage1Model(NGPModel):
+    config: Nerf2MeshStage1ModelConfig
+    # field: Nerf2MeshFieldStage1
+    # prev_field: Nerf2MeshField
+
+    def populate_modules(self):
+        self.all_mvps = None
+        self.train_mvp = None
+        self.eval_mvp = None
+        self.image_height = None
+        self.image_width = None
+        self.glctx = None
+        self.cx = None
+        self.cy = None
+        # super().populate_modules()
+        self.scene_aabb = torch.nn.Parameter(
+            self.scene_box.aabb.flatten(), requires_grad=False
+        )
+
+        self.register_buffer("bound", self.scene_box.aabb.max())
+
+        self.prev_field = Nerf2MeshField(
+            aabb=self.scene_box.aabb,
+            base_res=self.config.base_resolution,
+            max_res=self.config.desired_resolution,
+            log2_hashmap_size=self.config.log2hash_map_size,
+            num_layers_sigma=self.config.sigma_layers,
+            specular_dim=self.config.specular_dim,
+            hidden_dim_sigma=self.config.hidden_dim_sigma,
+            hidden_dim_color=self.config.hidden_dim_color,
+            num_levels_sigma_encoder=self.config.num_levels_sigma_encoder,
+            num_levels_color_encoder=self.config.num_levels_color_encoder,
+            n_features_per_level_sigma_encoder=self.config.n_features_per_level_sigma_encoder,
+            n_features_per_level_color_encoder=self.config.n_features_per_level_color_encoder,
+        )
+
+        self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
+
+        self.field = Nerf2MeshFieldStage1(
+                prev_field=self.prev_field,
+                grid_levels=self.config.grid_levels,
+                mesh_path=self.config.coarse_mesh_path,
+            )
+        self.sampler = UniformSampler()
+        
+        # Criterian in nerf2mesh
+        self.rgb_loss = torch.nn.MSELoss(reduction="none")
+
+        self.psnr = PeakSignalNoiseRatio(data_range=1.0)
+        self.ssim = structural_similarity_index_measure
+        self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
+
+
+    def get_training_callbacks(
+        self, training_callback_attributes: TrainingCallbackAttributes
+    ) -> List[TrainingCallback]:
+        
+        callbacks = []
+        def export_fine_mesh(step: int):
+            self.export_stage1(
+                path=self.config.fine_mesh_path,
+                h0=self.config.texture_size,
+                w0=self.config.texture_size,
+            )
+
+        callbacks.append(
+            TrainingCallback(
+                where_to_run=[TrainingCallbackLocation.AFTER_TRAIN],
+                # update_every_num_iters=1,
+                func=export_fine_mesh,
+            )
+        )
+        return callbacks
+    
+     # same as ngp model
+    def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor | List]:
+                
+        self.current_image = ray_bundle.camera_indices[0].squeeze(0)
+        with torch.no_grad():
+            ray_bundle.nears = self.config.min_near
+            ray_bundle.fars = self.config.max_far
+            ray_samples = self.sampler(ray_bundle=ray_bundle, num_samples=1)
+        field_outputs = self.field(
+            ray_samples=ray_samples,
+            height=self.image_height,
+            width=self.image_width,
+            mvp=self.train_mvp[self.current_image],
+        )
+
+        outputs = {
+            "rgb": field_outputs[Nerf2MeshFieldHeadNames.RGB].view(
+                self.image_height, self.image_width, -1
+            ),
+            "accumulation": field_outputs[Nerf2MeshFieldHeadNames.ACCUMULATION],
+        }
+
+        # the diff between weights and accumuation
+        # weights is individual weight of each point considered on each ray
+        # accumulation is the sum of weights of all points considered on each ray
+        # therefore, accumulation shape will be equal to number of rays
+
+        return outputs
+    
+    def get_loss_dict(self, outputs, batch, metrics_dict=None):
+        image = batch["image"][self.current_image, ..., :3].to(self.device)
+        # image = self.renderer_rgb.blend_background(image)
+
+        pred_rgb, image = self.renderer_rgb.blend_background_for_loss_computation(
+            pred_image=outputs["rgb"],
+            pred_accumulation=outputs["accumulation"],
+            gt_image=image,
+        )
+
+        # pred_rgb = pred_rgb.view(-1, 3)
+
+        loss = self.config.lambda_rgb * self.rgb_loss(
+                pred_rgb.view(-1, 3), image.view(-1, 3)
+            ).mean(-1)
+
+        if self.config.lambda_mask > 0 and batch["image"].size(-1) > 3:
+            gt_mask = batch["image"][self.current_image, ..., 3:].to(self.device)
+            pred_mask = outputs["accumulation"]
+            loss += self.config.lambda_mask * self.rgb_loss(
+                pred_mask.view(-1), gt_mask.view(-1)
+            )
+
+        if (
+            self.config.lambda_specular > 0
+            and (specular := outputs.get("specular")) is not None
+        ):
+            loss += self.config.lambda_specular * (specular**2).sum(-1).mean()
+
+        if self.config.lambda_lap > 0:
+            loss_lap = laplacian_smooth_loss(
+                self.field.vertices + self.field.vertices_offsets,
+                self.field.triangles,
+            )
+            loss = loss + self.config.lambda_lap * loss_lap
+        if self.config.lambda_offsets > 0:
+            if self.bound > 1:
+                abs_offsets_inner = self.field.vertices_offsets[
+                    : self.field.v_cumsum[1]
+                ].abs()
+                abs_offsets_outer = self.field.vertices_offsets[
+                    self.field.v_cumsum[1] :
+                ].abs()
+            else:
+                abs_offsets_inner = self.field.vertices_offsets.abs()
+            loss_offsets = (abs_offsets_inner**2).sum(-1).mean()
+
+            if self.bound > 1:
+                # loss_offsets = loss_offsets + torch.where(abs_offsets_outer > 0.02, abs_offsets_outer * 100, abs_offsets_outer * 0.01).sum(-1).mean()
+                loss_offsets = (
+                    loss_offsets + 0.1 * (abs_offsets_outer**2).sum(-1).mean()
+                )
+
+            loss = loss + self.config.lambda_offsets * loss_offsets
+
+        loss_dict = {"rgb_loss": loss.mean()}
+
+        return loss_dict
+    
+    def get_metrics_dict(self, outputs, batch):
+        image = batch["image"].to(self.device)
+        image = self.renderer_rgb.blend_background(image)
+        metrics_dict = {}
+        metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
+        # metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
+        return metrics_dict
+
+    
+    def get_param_groups(self) -> Dict[str, List[Parameter]]:
+        params = {"fields": list(self.prev_field.parameters())}
+        # TODO: add correct implementation
+        params["vertices_offsets"] = [self.field.vertices_offsets]
+
+        return params
+    
+
+
+    @torch.no_grad()
+    def export_stage1(self, path, h0=2048, w0=2048, png_compression_level=3):
+        # png_compression_level: 0 is no compression, 9 is max (default will be 3)
+
+        device = self.field.vertices.device
+        if self.glctx is None:
+            self.glctx = dr.RasterizeGLContext(output_db=False)
+
+        def _export_obj(v, f, h0, w0, ssaa=1, cas=0):
+            # v, f: torch Tensor
+
+            v_np = v.cpu().numpy()  # [N, 3]
+            f_np = f.cpu().numpy()  # [M, 3]
+
+            print(
+                f"[INFO] running xatlas to unwrap UVs for mesh: v={v_np.shape} f={f_np.shape}"
+            )
+
+            # unwrap uv in contracted space
+            atlas = xatlas.Atlas()
+            atlas.add_mesh(contract(v_np) if self.config.contract else v_np, f_np)
+            chart_options = xatlas.ChartOptions()
+            chart_options.max_iterations = 0  # disable merge_chart for faster unwrap...
+            pack_options = xatlas.PackOptions()
+            # pack_options.blockAlign = True
+            # pack_options.bruteForce = False
+            atlas.generate(chart_options=chart_options, pack_options=pack_options)
+            vmapping, ft_np, vt_np = atlas[0]  # [N], [M, 3], [N, 2]
+
+            # vmapping, ft_np, vt_np = xatlas.parametrize(v_np, f_np) # [N], [M, 3], [N, 2]
+
+            vt = torch.from_numpy(vt_np.astype(np.float32)).float().to(device)
+            ft = torch.from_numpy(ft_np.astype(np.int64)).int().to(device)
+
+            # render uv maps
+            uv = vt * 2.0 - 1.0  # uvs to range [-1, 1]
+            uv = torch.cat(
+                (uv, torch.zeros_like(uv[..., :1]), torch.ones_like(uv[..., :1])),
+                dim=-1,
+            )  # [N, 4]
+
+            if ssaa > 1:
+                h = int(h0 * ssaa)
+                w = int(w0 * ssaa)
+            else:
+                h, w = h0, w0
+
+            rast, _ = dr.rasterize(
+                self.glctx, uv.unsqueeze(0), ft, (h, w)
+            )  # [1, h, w, 4]
+            xyzs, _ = dr.interpolate(v.unsqueeze(0), rast, f)  # [1, h, w, 3]
+            mask, _ = dr.interpolate(
+                torch.ones_like(v[:, :1]).unsqueeze(0), rast, f
+            )  # [1, h, w, 1]
+
+            # masked query
+            xyzs = xyzs.view(-1, 3)
+            mask = (mask > 0).view(-1)
+
+            # TODO: add contract support
+            if self.config.contract:
+                xyzs = contract(xyzs)
+
+            feats = torch.zeros(h * w, 6, device=device, dtype=torch.float32)
+
+            if mask.any():
+                xyzs = xyzs[mask]  # [M, 3]
+
+                # check individual codes
+                # if self.config.individual_dim > 0:
+                #     ind_code = self.individual_codes[[0]]
+                # else:
+                #     ind_code = None
+                ind_code = None
+
+                # batched inference to avoid OOM
+                all_feats = []
+                head = 0
+                while head < xyzs.shape[0]:
+                    tail = min(head + 640000, xyzs.shape[0])
+                    with torch.cuda.amp.autocast(enabled=True):
+                        all_feats.append(
+                            self.field._get_diffuse_color(
+                                xyzs[head:tail], ind_code
+                            ).float()
+                        )
+                    head += 640000
+
+                feats[mask] = torch.cat(all_feats, dim=0)
+
+            feats = feats.view(h, w, -1)  # 6 channels
+            mask = mask.view(h, w)
+
+            # quantize [0.0, 1.0] to [0, 255]
+            feats = feats.cpu().numpy()
+            feats = (feats * 255).astype(np.uint8)
+
+            ### NN search as a queer antialiasing ...
+            mask = mask.cpu().numpy()
+
+            inpaint_region = binary_dilation(mask, iterations=32)  # pad width
+            inpaint_region[mask] = 0
+
+            search_region = mask.copy()
+            not_search_region = binary_erosion(search_region, iterations=3)
+            search_region[not_search_region] = 0
+
+            search_coords = np.stack(np.nonzero(search_region), axis=-1)
+            inpaint_coords = np.stack(np.nonzero(inpaint_region), axis=-1)
+
+            knn = NearestNeighbors(n_neighbors=1, algorithm="kd_tree").fit(
+                search_coords
+            )
+            _, indices = knn.kneighbors(inpaint_coords)
+
+            feats[tuple(inpaint_coords.T)] = feats[
+                tuple(search_coords[indices[:, 0]].T)
+            ]
+
+            # do ssaa after the NN search, in numpy
+            feats0 = cv2.cvtColor(feats[..., :3], cv2.COLOR_RGB2BGR)  # albedo
+            feats1 = cv2.cvtColor(
+                feats[..., 3:], cv2.COLOR_RGB2BGR
+            )  # visibility features
+
+            if ssaa > 1:
+                feats0 = cv2.resize(feats0, (w0, h0), interpolation=cv2.INTER_LINEAR)
+                feats1 = cv2.resize(feats1, (w0, h0), interpolation=cv2.INTER_LINEAR)
+
+            os.makedirs(path, exist_ok=True)
+            # cv2.imwrite(os.path.join(path, f'feat0_{cas}.png'), feats0, [int(cv2.IMWRITE_PNG_COMPRESSION), png_compression_level])
+            # cv2.imwrite(os.path.join(path, f'feat1_{cas}.png'), feats1, [int(cv2.IMWRITE_PNG_COMPRESSION), png_compression_level])
+            cv2.imwrite(os.path.join(path, f"feat0_{cas}.jpg"), feats0)
+            cv2.imwrite(os.path.join(path, f"feat1_{cas}.jpg"), feats1)
+
+            # save obj (v, vt, f /)
+            obj_file = os.path.join(path, f"mesh_{cas}.obj")
+            mtl_file = os.path.join(path, f"mesh_{cas}.mtl")
+
+            print(f"[INFO] writing obj mesh to {obj_file}")
+            with open(obj_file, "w") as fp:
+                fp.write(f"mtllib mesh_{cas}.mtl \n")
+
+                print(f"[INFO] writing vertices {v_np.shape}")
+                for v in v_np:
+                    fp.write(f"v {v[0]} {v[1]} {v[2]} \n")
+
+                print(f"[INFO] writing vertices texture coords {vt_np.shape}")
+                for v in vt_np:
+                    fp.write(f"vt {v[0]} {1 - v[1]} \n")
+
+                print(f"[INFO] writing faces {f_np.shape}")
+                fp.write(f"usemtl defaultMat \n")
+                for i in range(len(f_np)):
+                    fp.write(
+                        f"f {f_np[i, 0] + 1}/{ft_np[i, 0] + 1} {f_np[i, 1] + 1}/{ft_np[i, 1] + 1} {f_np[i, 2] + 1}/{ft_np[i, 2] + 1} \n"
+                    )
+
+            with open(mtl_file, "w") as fp:
+                fp.write(f"newmtl defaultMat \n")
+                fp.write(f"Ka 1 1 1 \n")
+                fp.write(f"Kd 1 1 1 \n")
+                fp.write(f"Ks 0 0 0 \n")
+                fp.write(f"Tr 1 \n")
+                fp.write(f"illum 1 \n")
+                fp.write(f"Ns 0 \n")
+                fp.write(f"map_Kd feat0_{cas}.jpg \n")
+
+        v = (self.field.vertices + self.field.vertices_offsets).detach()
+        f = self.field.triangles.detach()
+
+        for cas in range(self.config.grid_levels):
+            cur_v = v[self.field.v_cum_sum[cas] : self.field.v_cum_sum[cas + 1]]
+            cur_f = (
+                f[self.field.f_cumsum[cas] : self.field.f_cumsum[cas + 1]]
+                - self.field.v_cum_sum[cas]
+            )
+            _export_obj(cur_v, cur_f, h0, w0, self.field.super_sample, cas)
+
+            # half the texture resolution for remote area.
+            # if not self.opt.sdf and h0 > 2048 and w0 > 2048:
+            #     h0 //= 2
+            #     w0 //= 2
+
+        # save mlp as json
+        params = dict(self.field.specular_net.named_parameters())
+
+        mlp = {}
+        for k, p in params.items():
+            p_np = p.detach().cpu().numpy().T
+            print(f"[INFO] wrting MLP param {k}: {p_np.shape}")
+            mlp[k] = p_np.tolist()
+
+        mlp["bound"] = self.bound.item()
+        mlp["cascade"] = self.config.grid_levels
+
+        mlp_file = os.path.join(path, f"mlp.json")
+        with open(mlp_file, "w") as fp:
+            json.dump(mlp, fp, indent=2)
+

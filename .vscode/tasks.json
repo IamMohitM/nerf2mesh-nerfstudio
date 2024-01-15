@@ -14,6 +14,34 @@
                 "isDefault": true
             },
             "problemMatcher": []
+        },
+        {
+            "label": "Nerf2Mesh Config Options",
+            "type": "shell",
+            "command": "source venv/bin/activate && ns-train nerf2mesh -h",
+            "options": {
+                "env": {
+                    "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh"
+                }
+            },
+            "group": {
+                "isDefault": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Nerf2Mesh Stage 1 Config Options",
+            "type": "shell",
+            "command": "source venv/bin/activate && ns-train nerf2mesh --stage 1 -h",
+            "options": {
+                "env": {
+                    "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh"
+                }
+            },
+            "group": {
+                "isDefault": true
+            },
+            "problemMatcher": []
         }
     ]
 }
