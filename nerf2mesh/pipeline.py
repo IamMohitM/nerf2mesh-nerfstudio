@@ -19,9 +19,13 @@ class Nerf2MeshPipeline(VanillaPipeline):
     def __init__(self, config, *args, **kwargs):
         super().__init__(config, *args, **kwargs)
         #NOTE: assumes all height, fy, width, fx are the same for all cameras
-        self.model.mvps = torch.cat([self.datamanager.train_dataset.metadata["mvps"], self.datamanager.eval_dataset.metadata["mvps"]], dim=0)
+        self.model.all_mvps = torch.cat([self.datamanager.train_dataset.metadata["mvps"], self.datamanager.eval_dataset.metadata["mvps"]], dim=0).to(self.model.device)
+        self.model.train_mvp = self.datamanager.train_dataset.metadata["mvps"].to(self.model.device)
+        self.model.eval_mvp = self.datamanager.eval_dataset.metadata["mvps"].to(self.model.device)
         self.model.image_height = self.datamanager.train_dataset.cameras.image_height[0].item()
         self.model.image_width = self.datamanager.train_dataset.cameras.image_width[0].item()
+        self.model.image_cx = self.datamanager.train_dataset.cameras.cx[0].item()
+        self.model.image_cy = self.datamanager.train_dataset.cameras.cy[0].item()
 
     
     @profiler.time_function

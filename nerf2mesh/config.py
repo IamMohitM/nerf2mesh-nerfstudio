@@ -1,9 +1,8 @@
-from nerfstudio.plugins.types import MethodSpecification
+from nerfstudio.plugins.types import MethodSpecification #@IgnoreException
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.engine.optimizers import AdamOptimizerConfig
-from nerfstudio.data.datamanagers.base_datamanager import (
-    VanillaDataManagerConfig,
-)
+
+from nerf2mesh.datamanager import Nerf2MeshDataManagerConfig
 from nerf2mesh.dataparser import Nerf2MeshDataParserConfig
 from nerf2mesh.pipeline import Nerf2MeshPipelineConfig
 from nerf2mesh.nerf2mesh import Nerf2MeshModelConfig
@@ -20,7 +19,7 @@ nerf2mesh = MethodSpecification(
         max_num_iterations=max_num_iterations,
         mixed_precision=True,
         pipeline=Nerf2MeshPipelineConfig(
-            datamanager=VanillaDataManagerConfig(
+            datamanager=Nerf2MeshDataManagerConfig(
                 dataparser=Nerf2MeshDataParserConfig(),
                 train_num_rays_per_batch=8192,
                 eval_num_rays_per_batch=8192,
@@ -35,6 +34,7 @@ nerf2mesh = MethodSpecification(
             "vertices_offsets":
             {
                 "optimizer": AdamOptimizerConfig(lr=1e-4, eps=1e-15, weight_decay=0),
+                "scheduler": Nerf2MeshSchedulerConfig(max_steps=max_num_iterations)
             }
         },
         vis="viewer",
