@@ -1023,7 +1023,7 @@ class Nerf2MeshModel(NGPModel):
             print(f"[INFO] wrting MLP param {k}: {p_np.shape}")
             mlp[k] = p_np.tolist()
 
-        mlp["bound"] = self.bound
+        mlp["bound"] = self.bound.item()
         mlp["cascade"] = self.config.grid_levels
 
         mlp_file = os.path.join(path, f"mlp.json")
