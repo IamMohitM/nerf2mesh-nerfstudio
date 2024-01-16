@@ -1315,7 +1315,7 @@ class Nerf2MeshStage1Model(NGPModel):
                     tail = min(head + 640000, xyzs.shape[0])
                     with torch.cuda.amp.autocast(enabled=True):
                         all_feats.append(
-                            self.field._get_diffuse_color(
+                            self.prev_field._get_diffuse_color(
                                 xyzs[head:tail], ind_code
                             ).float()
                         )
@@ -1418,7 +1418,7 @@ class Nerf2MeshStage1Model(NGPModel):
             #     w0 //= 2
 
         # save mlp as json
-        params = dict(self.field.specular_net.named_parameters())
+        params = dict(self.prev_field.specular_net.named_parameters())
 
         mlp = {}
         for k, p in params.items():
