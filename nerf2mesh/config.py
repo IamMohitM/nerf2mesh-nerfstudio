@@ -21,7 +21,9 @@ nerf2mesh = MethodSpecification(
         mixed_precision=True,
         pipeline=Nerf2MeshPipelineConfig(
             datamanager=Nerf2MeshDataManagerConfig(
-                dataparser=Nerf2MeshDataParserConfig(),
+                dataparser=Nerf2MeshDataParserConfig(
+                    train_split_fraction=0.98
+                ),
                 train_num_rays_per_batch=8192,
                 eval_num_rays_per_batch=8192,
             ),

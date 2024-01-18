@@ -178,152 +178,101 @@ class Nerf2MeshModel(NGPModel):
         self.ssim = structural_similarity_index_measure
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
 
-        if self.config.stage == 0:
-            self.occupancy_grid = nerfacc.OccGridEstimator(
-                roi_aabb=self.scene_aabb,
-                resolution=self.config.grid_resolution,
-                levels=self.config.grid_levels,
-            )
-            self.sampler = VolumetricSampler(
-                occupancy_grid=self.occupancy_grid, density_fn=self.field.density_fn
-            )
+        self.occupancy_grid = nerfacc.OccGridEstimator(
+            roi_aabb=self.scene_aabb,
+            resolution=self.config.grid_resolution,
+            levels=self.config.grid_levels,
+        )
+        self.sampler = VolumetricSampler(
+            occupancy_grid=self.occupancy_grid, density_fn=self.field.density_fn
+        )
 
-        if self.config.stage == 1:
-            self.field_2 = Nerf2MeshFieldStage1(
-                prev_field=self.field,
-                grid_levels=self.config.grid_levels,
-                mesh_path=self.config.coarse_mesh_path,
-            )
-            self.sampler = UniformSampler()
 
     def get_training_callbacks(
         self, training_callback_attributes: TrainingCallbackAttributes
     ) -> List[TrainingCallback]:
-        if self.config.stage == 0:
-            callbacks = super().get_training_callbacks(training_callback_attributes)
+        callbacks = super().get_training_callbacks(training_callback_attributes)
 
-            def export_coarse_mesh(step: int):
-                self.export_stage0(
-                    resolution=512,
-                    decimate_target=3e5,
-                    S=self.config.grid_resolution,
-                )
-
-            callbacks.append(
-                TrainingCallback(
-                    where_to_run=[TrainingCallbackLocation.AFTER_TRAIN],
-                    # update_every_num_iters=1,
-                    func=export_coarse_mesh,
-                )
+        def export_coarse_mesh(step: int):
+            self.export_stage0(
+                resolution=512,
+                decimate_target=3e5,
+                S=self.config.grid_resolution,
             )
-        elif self.config.stage == 1:
-            callbacks = []
-            def export_fine_mesh(step: int):
-                self.export_stage1(
-                    path=self.config.fine_mesh_path,
-                    h0=self.config.texture_size,
-                    w0=self.config.texture_size,
-                )
 
-            callbacks.append(
-                TrainingCallback(
-                    where_to_run=[TrainingCallbackLocation.AFTER_TRAIN],
-                    # update_every_num_iters=1,
-                    func=export_fine_mesh,
-                )
+        callbacks.append(
+            TrainingCallback(
+                where_to_run=[TrainingCallbackLocation.AFTER_TRAIN],
+                # update_every_num_iters=1,
+                func=export_coarse_mesh,
             )
+        )
         return callbacks
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         params = {"fields": list(self.field.parameters())}
-        # TODO: add correct implementation
-        if self.config.stage == 1:
-            params["vertices_offsets"] = [self.field_2.vertices_offsets]
 
         return params
-        return {"fields": list(self.field.parameters())}
 
     # # same as ngp model
     def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor | List]:
         num_rays = len(ray_bundle)
 
-        if self.config.stage == 0:
-            with torch.no_grad():
-                ray_samples, ray_indices = self.sampler(
-                    ray_bundle=ray_bundle,
-                    near_plane=self.config.min_near,
-                    far_plane=self.config.max_far,
-                    render_step_size=self.config.render_step_size,
-                    alpha_thre=self.config.alpha_thre,
-                    cone_angle=self.config.cone_angle,
-                )
-            field_outputs = self.field(ray_samples, shading=self.config.shading_type)
-            packed_info = nerfacc.pack_info(ray_indices, num_rays)
+        with torch.no_grad():
+            ray_samples, ray_indices = self.sampler(
+                ray_bundle=ray_bundle,
+                near_plane=self.config.min_near,
+                far_plane=self.config.max_far,
+                render_step_size=self.config.render_step_size,
+                alpha_thre=self.config.alpha_thre,
+                cone_angle=self.config.cone_angle,
+            )
+        field_outputs = self.field(ray_samples, shading=self.config.shading_type)
+        packed_info = nerfacc.pack_info(ray_indices, num_rays)
 
-            weights = nerfacc.render_weight_from_density(
-                t_starts=ray_samples.frustums.starts[..., 0],
-                t_ends=ray_samples.frustums.ends[..., 0],
-                sigmas=field_outputs[Nerf2MeshFieldHeadNames.DENSITY][..., 0],
-                packed_info=packed_info,
-            )[0]
-            weights = weights[..., None]
+        weights = nerfacc.render_weight_from_density(
+            t_starts=ray_samples.frustums.starts[..., 0],
+            t_ends=ray_samples.frustums.ends[..., 0],
+            sigmas=field_outputs[Nerf2MeshFieldHeadNames.DENSITY][..., 0],
+            packed_info=packed_info,
+        )[0]
+        weights = weights[..., None]
 
-            rgb = self.renderer_rgb(
-                rgb=field_outputs[Nerf2MeshFieldHeadNames.RGB],
+        rgb = self.renderer_rgb(
+            rgb=field_outputs[Nerf2MeshFieldHeadNames.RGB],
+            weights=weights,
+            ray_indices=ray_indices,
+            num_rays=num_rays,
+        )
+
+        if (
+            specular := field_outputs.get(Nerf2MeshFieldHeadNames.SPECULAR)
+        ) is not None:
+            specular = self.renderer_rgb(
+                rgb=specular,
                 weights=weights,
                 ray_indices=ray_indices,
                 num_rays=num_rays,
             )
 
-            if (
-                specular := field_outputs.get(Nerf2MeshFieldHeadNames.SPECULAR)
-            ) is not None:
-                specular = self.renderer_rgb(
-                    rgb=specular,
-                    weights=weights,
-                    ray_indices=ray_indices,
-                    num_rays=num_rays,
-                )
+        depth = self.renderer_depth(
+            weights=weights,
+            ray_samples=ray_samples,
+            ray_indices=ray_indices,
+            num_rays=num_rays,
+        )
+        accumulation = self.renderer_accumulation(
+            weights=weights, ray_indices=ray_indices, num_rays=num_rays
+        )
 
-            depth = self.renderer_depth(
-                weights=weights,
-                ray_samples=ray_samples,
-                ray_indices=ray_indices,
-                num_rays=num_rays,
-            )
-            accumulation = self.renderer_accumulation(
-                weights=weights, ray_indices=ray_indices, num_rays=num_rays
-            )
-
-            outputs = {
-                "rgb": rgb,
-                "accumulation": accumulation,
-                "depth": depth,
-                "num_samples_per_ray": packed_info[:, 1],
-                "specular_rgb": specular,
-                "specular": field_outputs.get(Nerf2MeshFieldHeadNames.SPECULAR),
-            }
-
-        if self.config.stage == 1:
-            self.current_image = ray_bundle.camera_indices[0].squeeze(0)
-            with torch.no_grad():
-                ray_bundle.nears = self.config.min_near
-                ray_bundle.fars = self.config.max_far
-                ray_samples = self.sampler(ray_bundle=ray_bundle, num_samples=1)
-            field_outputs = self.field_2(
-                ray_samples=ray_samples,
-                height=self.image_height,
-                width=self.image_width,
-                mvp=self.train_mvp[self.current_image],
-            )
-
-            outputs = {
-                "rgb": field_outputs[Nerf2MeshFieldHeadNames.RGB].view(
-                    self.image_height, self.image_width, -1
-                ),
-                "accumulation": field_outputs[Nerf2MeshFieldHeadNames.ACCUMULATION],
-            }
-
+        outputs = {
+            "rgb": rgb,
+            "accumulation": accumulation,
+            "depth": depth,
+            "num_samples_per_ray": packed_info[:, 1],
+            "specular_rgb": specular,
+            "specular": field_outputs.get(Nerf2MeshFieldHeadNames.SPECULAR),
+        }
         # the diff between weights and accumuation
         # weights is individual weight of each point considered on each ray
         # accumulation is the sum of weights of all points considered on each ray
@@ -380,22 +329,13 @@ class Nerf2MeshModel(NGPModel):
             gt_image=image,
         )
 
-        # pred_rgb = pred_rgb.view(-1, 3)
-
-        if self.config.stage == 0:
-            loss = self.config.lambda_rgb * self.rgb_loss(
-                pred_rgb.view(-1, 3), image.view(-1, 3)
-            ).mean(-1)
-        elif self.config.stage == 1:
-            loss = self.config.lambda_rgb * self.rgb_loss(
-                pred_rgb.view(-1, 3), image[self.current_image].view(-1, 3)
-            ).mean(-1)
+        loss = self.config.lambda_rgb * self.rgb_loss(
+            pred_rgb.view(-1, 3), image.view(-1, 3)
+        ).mean(-1)
 
         if self.config.lambda_mask > 0 and batch["image"].size(-1) > 3:
-            if self.config.stage == 0:
-                gt_mask = batch["image"][..., 3:].to(self.device)
-            elif self.config.stage == 1:
-                gt_mask = batch["image"][self.current_image, ..., 3:].to(self.device)
+            
+            gt_mask = batch["image"][..., 3:].to(self.device)
             pred_mask = outputs["accumulation"]
             loss += self.config.lambda_mask * self.rgb_loss(
                 pred_mask.view(-1), gt_mask.view(-1)
@@ -406,33 +346,6 @@ class Nerf2MeshModel(NGPModel):
             and (specular := outputs.get("specular")) is not None
         ):
             loss += self.config.lambda_specular * (specular**2).sum(-1).mean()
-
-        if self.config.stage == 1:
-            if self.config.lambda_lap > 0:
-                loss_lap = laplacian_smooth_loss(
-                    self.field_2.vertices + self.field_2.vertices_offsets,
-                    self.field_2.triangles,
-                )
-                loss = loss + self.config.lambda_lap * loss_lap
-            if self.config.lambda_offsets > 0:
-                if self.bound > 1:
-                    abs_offsets_inner = self.field_2.vertices_offsets[
-                        : self.field_2.v_cumsum[1]
-                    ].abs()
-                    abs_offsets_outer = self.field_2.vertices_offsets[
-                        self.field_2.v_cumsum[1] :
-                    ].abs()
-                else:
-                    abs_offsets_inner = self.field_2.vertices_offsets.abs()
-                loss_offsets = (abs_offsets_inner**2).sum(-1).mean()
-
-                if self.bound > 1:
-                    # loss_offsets = loss_offsets + torch.where(abs_offsets_outer > 0.02, abs_offsets_outer * 100, abs_offsets_outer * 0.01).sum(-1).mean()
-                    loss_offsets = (
-                        loss_offsets + 0.1 * (abs_offsets_outer**2).sum(-1).mean()
-                    )
-
-                loss = loss + self.config.lambda_offsets * loss_offsets
 
         loss_dict = {"rgb_loss": loss.mean()}
 
