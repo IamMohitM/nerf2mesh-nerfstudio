@@ -24,8 +24,8 @@ class SimpleRayGenerator(RayGenerator):
         fx = self.cameras.fx[c[0]].item()
         fy = self.cameras.fy[c[0]].item()
         
-        y = self.image_coords[..., 0].view(-1)
-        x = self.image_coords[..., 1].view(-1)
+        y = self.image_coords[..., 0].contiguous().view(-1)
+        x = self.image_coords[..., 1].contiguous().view(-1)
         zs = -torch.ones_like(c)
         xs = (x - cx) / fx
         ys = -(y - cy) / fy
@@ -37,7 +37,7 @@ class SimpleRayGenerator(RayGenerator):
         origins = self.cameras.camera_to_worlds[c, :3, 3]
 
         #pixel area is constant for all pixels - 
-        pixel_area = torch.tensor(1/(width*height)).expand_as(origins[..., 0]).to(self.cameras.device)
+        pixel_area = torch.tensor(1/(width*height)).expand_as(origins[..., 0])#.to(self.cameras.device)
 
         ray_bundle = RayBundle(
             origins=origins,
