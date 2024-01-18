@@ -22,7 +22,7 @@ class AllPixelSampler(PixelSampler):
         i, j= torch.meshgrid(   
             torch.arange(image_height, device=device),
             torch.arange(image_width, device=device),
-            # indexing='ij'
+            indexing='ij'
         )
         
         pixels = torch.stack([j, i], dim=-1).reshape(-1, 2)
