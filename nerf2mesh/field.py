@@ -266,12 +266,13 @@ class Nerf2MeshFieldStage1(Field):
         )
 
     #TODO: perhaps dont' add height and width to forward and maybe include in raysamples
-    def forward(self, ray_samples: RaySamples, height, width, mvp, compute_normals: bool = False) -> Dict[Nerf2MeshFieldHeadNames, Tensor]:
+    def forward(self, ray_samples: RaySamples, height=None, width = None, mvp = None, compute_normals: bool = False) -> Dict[Nerf2MeshFieldHeadNames, Tensor]:
         
-        field_outputs = self.get_outputs(ray_samples, height, width, mvp)
+        
+        return self.get_outputs(ray_samples, height, width, mvp)
         # field_outputs[FieldHeadNames.DENSITY] = density
 
-        return field_outputs
+        # return field_outputs
 
     def get_outputs(
         self,
@@ -281,8 +282,8 @@ class Nerf2MeshFieldStage1(Field):
         mvp: Tensor,
         # bg_color: str = 
     ) -> Dict[Nerf2MeshFieldHeadNames, Tensor]:
-        directions = ray_samples.frustums.directions
-        prefix = directions.shape[:1]
+        directions = ray_samples.frustums.directions.contiguous().view(-1, 3)
+        prefix = directions.shape[:-1]
 
         if self.super_sample > 1:
             H = int(height * self.super_sample)

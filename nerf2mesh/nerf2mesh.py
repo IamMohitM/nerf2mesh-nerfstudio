@@ -1129,10 +1129,10 @@ class Nerf2MeshStage1Model(NGPModel):
         return loss_dict
     
     def get_metrics_dict(self, outputs, batch):
-        image = batch["image"].to(self.device)
+        image = batch["image"][self.current_image].to(self.device)
         image = self.renderer_rgb.blend_background(image)
         metrics_dict = {}
-        metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
+        metrics_dict["psnr"] = self.psnr(outputs["rgb"], image[..., :3]).item()
         # metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
         return metrics_dict
 
