@@ -21,6 +21,7 @@ class Nerf2MeshDataParser(InstantNGP):
     def _generate_dataparser_outputs(self, split="train"):
         dataparser_output = super()._generate_dataparser_outputs(split)
         # NOTE: assumes all height, fy, width, fx are the same
+        # dataparser_output.scene_box.aabb *= 2.0
         y = dataparser_output.cameras.height[0].item() / (
             2.0 * dataparser_output.cameras.fy[0].item()
         )
@@ -55,5 +56,7 @@ class Nerf2MeshDataParser(InstantNGP):
         )
         mvps = projection.unsqueeze(0) @ torch.inverse(new_poses)
         dataparser_output.metadata["mvps"] = mvps
-
+        # if dataparser_output.cameras.metadata is None:
+        #     dataparser_output.cameras.metadata = {}
+        # dataparser_output.cameras.metadata.update({'mvps': mvps})
         return dataparser_output

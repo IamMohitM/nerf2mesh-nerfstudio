@@ -21,6 +21,7 @@ from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.models.instant_ngp import NGPModel, InstantNGPModelConfig
 from nerfstudio.model_components.ray_samplers import VolumetricSampler, UniformSampler
+
 from nerfstudio.model_components.renderers import (
     RGBRenderer,
     AccumulationRenderer,
@@ -46,6 +47,7 @@ from nerf2mesh.utils import (
     laplacian_smooth_loss,
     contract,
 )
+from nerf2mesh.sampler import MetaDataUniformSampler
 
 import cv2
 import json
@@ -943,17 +945,6 @@ class Nerf2MeshModel(NGPModel):
         with open(mlp_file, "w") as fp:
             json.dump(mlp, fp, indent=2)
 
-    def get_metrics_dict(self, outputs, batch):
-        image = batch["image"].to(self.device)
-        image = self.renderer_rgb.blend_background(image)
-        metrics_dict = {}
-        if self.config.stage == 0:
-            metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
-            metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
-        elif self.config.stage == 1:
-            metrics_dict["psnr"] = self.psnr(outputs["rgb"], image[self.current_image])
-        return metrics_dict
-
 
 @dataclass
 class Nerf2MeshStage1ModelConfig(Nerf2MeshModelConfig):
@@ -1008,8 +999,11 @@ class Nerf2MeshStage1Model(NGPModel):
                 prev_field=self.prev_field,
                 grid_levels=self.config.grid_levels,
                 mesh_path=self.config.coarse_mesh_path,
+                train_mvps = self.train_mvp,
+                # eval_mvps = self.eval,
+
             )
-        self.sampler = UniformSampler()
+        self.sampler = MetaDataUniformSampler()
         
         # Criterian in nerf2mesh
         self.rgb_loss = torch.nn.MSELoss(reduction="none")
@@ -1050,9 +1044,6 @@ class Nerf2MeshStage1Model(NGPModel):
             ray_samples = self.sampler(ray_bundle=ray_bundle, num_samples=1)
         field_outputs = self.field(
             ray_samples=ray_samples,
-            height=self.image_height,
-            width=self.image_width,
-            mvp=self.train_mvp[self.current_image],
         )
 
         outputs = {
@@ -1062,15 +1053,13 @@ class Nerf2MeshStage1Model(NGPModel):
             "accumulation": field_outputs[Nerf2MeshFieldHeadNames.ACCUMULATION],
         }
 
-        # the diff between weights and accumuation
-        # weights is individual weight of each point considered on each ray
-        # accumulation is the sum of weights of all points considered on each ray
-        # therefore, accumulation shape will be equal to number of rays
-
         return outputs
     
+    # def get_outputs_for_camera_ray_bundle(self, camera_ray_bundle: RayBundle) -> Dict[str, torch.Tensor]:
+    #     return {}
+    
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
-        image = batch["image"][self.current_image, ..., :3].to(self.device)
+        image = batch["image"][..., :3].to(self.device)
         # image = self.renderer_rgb.blend_background(image)
 
         pred_rgb, image = self.renderer_rgb.blend_background_for_loss_computation(
@@ -1078,15 +1067,12 @@ class Nerf2MeshStage1Model(NGPModel):
             pred_accumulation=outputs["accumulation"],
             gt_image=image,
         )
-
-        # pred_rgb = pred_rgb.view(-1, 3)
-
         loss = self.config.lambda_rgb * self.rgb_loss(
                 pred_rgb.view(-1, 3), image.view(-1, 3)
             ).mean(-1)
 
         if self.config.lambda_mask > 0 and batch["image"].size(-1) > 3:
-            gt_mask = batch["image"][self.current_image, ..., 3:].to(self.device)
+            gt_mask = batch["image"][..., 3:].to(self.device)
             pred_mask = outputs["accumulation"]
             loss += self.config.lambda_mask * self.rgb_loss(
                 pred_mask.view(-1), gt_mask.view(-1)
@@ -1129,10 +1115,12 @@ class Nerf2MeshStage1Model(NGPModel):
         return loss_dict
     
     def get_metrics_dict(self, outputs, batch):
-        image = batch["image"][self.current_image].to(self.device)
+        image = batch["image"].to(self.device)
         image = self.renderer_rgb.blend_background(image)
         metrics_dict = {}
         metrics_dict["psnr"] = self.psnr(outputs["rgb"], image[..., :3]).item()
+        t: torch.tensor = outputs['rgb'].detach().cpu()
+        image
         # metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
         return metrics_dict
 

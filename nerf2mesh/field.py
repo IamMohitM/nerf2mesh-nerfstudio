@@ -35,11 +35,14 @@ def scale_img_nhwc(x: torch.tensor, size: Tuple, mag="bilinear", min="bilinear")
             y = torch.nn.functional.interpolate(y, size, mode=mag)
     return y.permute(0, 2, 3, 1).contiguous()  # NCHW -> NHWC
 
+
 def scale_img_hwc(x, size, mag="bilinear", min="bilinear"):
     return scale_img_nhwc(x[None, ...], size, mag, min)[0]
 
+
 def scale_img_hw(x, size, mag="bilinear", min="bilinear"):
     return scale_img_nhwc(x[None, ..., None], size, mag, min)[0, ..., 0]
+
 
 class Nerf2MeshFieldHeadNames(Enum):
     RGB = "rgb"
@@ -47,6 +50,7 @@ class Nerf2MeshFieldHeadNames(Enum):
     SPECULAR = "specular"
     DEPTH = "depth"
     ACCUMULATION = "accumulation"
+
 
 class Nerf2MeshField(Field):
     def __init__(
@@ -147,7 +151,6 @@ class Nerf2MeshField(Field):
         selector = ((positions > 0.0) & (positions < 1.0)).all(dim=-1)
         positions = positions * selector[..., None]
         h = self.density_mlp(positions)
-        # h = torch.cat([positions_flat, h], dim=-1)
         density = trunc_exp(h.to(positions))
         density = density * selector[..., None]
         return density, None
@@ -194,22 +197,21 @@ class Nerf2MeshField(Field):
 
         outputs[Nerf2MeshFieldHeadNames.RGB] = color
         return outputs
-    
 
 
 class Nerf2MeshFieldStage1(Field):
-
     def __init__(
-            self,
-            prev_field: Nerf2MeshField,
-            grid_levels: int,
-            mesh_path: str,
-            super_sample: int = 2,
-            pos_gradient_boost: int = 1,
-            enable_offset_nerf_grad: bool = False,
+        self,
+        prev_field: Nerf2MeshField,
+        grid_levels: int,
+        mesh_path: str,
+        train_mvps: torch.tensor,
+        super_sample: int = 2,
+        pos_gradient_boost: int = 1,
+        enable_offset_nerf_grad: bool = False,
     ):
         super().__init__()
-        
+
         self.prev_field = prev_field
         self.mesh_path = mesh_path
         self.glctx = dr.RasterizeGLContext(output_db=False)
@@ -218,6 +220,7 @@ class Nerf2MeshFieldStage1(Field):
         self.grid_levels = grid_levels
         self.device = next(self.prev_field.parameters()).device
         self.enable_offset_nerf_grad = enable_offset_nerf_grad
+        self.train_mvp = train_mvps
 
         vertices = []
         triangles = []
@@ -265,23 +268,32 @@ class Nerf2MeshFieldStage1(Field):
             f"Loaded coarse mesh: vertices - {self.vertices.shape}, triangles - {self.triangles.shape}"
         )
 
-    #TODO: perhaps dont' add height and width to forward and maybe include in raysamples
-    def forward(self, ray_samples: RaySamples, height=None, width = None, mvp = None, compute_normals: bool = False) -> Dict[Nerf2MeshFieldHeadNames, Tensor]:
-        
-        
-        return self.get_outputs(ray_samples, height, width, mvp)
-        # field_outputs[FieldHeadNames.DENSITY] = density
-
-        # return field_outputs
+    # TODO: perhaps dont' add height and width to forward and maybe include in raysamples
+    def forward(
+        self, ray_samples: RaySamples, compute_normals: bool = False
+    ) -> Dict[Nerf2MeshFieldHeadNames, Tensor]:
+        return self.get_outputs(ray_samples)
+    
+    def safe_normalize(self, x, eps=1e-20):
+        return x / torch.sqrt(torch.clamp(torch.sum(x * x, -1, keepdim=True), min=eps))
 
     def get_outputs(
         self,
         ray_samples: RaySamples,
-        height: int, #TODO: add these parameters
-        width: int, #TODO: add these parameters,
-        mvp: Tensor,
-        # bg_color: str = 
+        # bg_color: str =
     ) -> Dict[Nerf2MeshFieldHeadNames, Tensor]:
+        height = ray_samples.metadata.get("height")
+        width = ray_samples.metadata.get("width")
+        if height is None or width is None:
+            return self.prev_field(ray_samples, shading = Shading.full)
+        assert (
+            height is not None and width is not None
+        ), "height and width must be provided in ray sample metadata"
+        height = height[0].item()
+        width = width[0].item()
+
+        current_camera_index = ray_samples.camera_indices[0].item()
+        mvp = self.train_mvp[current_camera_index].to(self.device)
         directions = ray_samples.frustums.directions.contiguous().view(-1, 3)
         prefix = directions.shape[:-1]
 
@@ -295,16 +307,19 @@ class Nerf2MeshFieldStage1(Field):
             H, W = height, width
             dirs = directions.view(-1, 3).contiguous()
 
-        dirs = get_normalized_directions(dirs) 
+        dirs = get_normalized_directions(dirs)
 
-        
         results = {}
 
         vertices = self.vertices + self.vertices_offsets
-        vertices_clip = torch.matmul(
-            F.pad(vertices, (0, 1), "constant", 1.0),
-            torch.transpose(mvp, 0, 1),
-        ).float().unsqueeze(0)
+        vertices_clip = (
+            torch.matmul(
+                F.pad(vertices, (0, 1), "constant", 1.0),
+                torch.transpose(mvp, 0, 1),
+            )
+            .float()
+            .unsqueeze(0)
+        )
 
         rast, _ = dr.rasterize(self.glctx, vertices_clip, self.triangles, (H, W))
 
@@ -317,22 +332,28 @@ class Nerf2MeshFieldStage1(Field):
         mask_flatten = (mask > 0).view(-1).detach()
         xyzs = xyzs.view(-1, 3)
 
-        #TODO: add contraction support for unbounded scenes
+        # TODO: add contraction support for unbounded scenes
         # if self.opt.contract:
         #     xyzs = contract(xyzs)
 
         rgbs = torch.zeros(H * W, 3, device=self.device, dtype=torch.float32)
 
-
         if mask_flatten.any():
             with torch.cuda.amp.autocast(enabled=True):
-                diffuse_feat = self.prev_field._get_diffuse_color(xyzs[mask_flatten] if self.enable_offset_nerf_grad else xyzs[mask_flatten].detach())
+                diffuse_feat = self.prev_field._get_diffuse_color(
+                    xyzs[mask_flatten]
+                    if self.enable_offset_nerf_grad
+                    else xyzs[mask_flatten].detach()
+                )
                 diffuse = diffuse_feat[..., :3]
-                specular_feat = self.prev_field._get_specular_color(dirs[mask_flatten], diffuse_feat)
+                specular_feat = self.prev_field._get_specular_color(
+                    dirs[mask_flatten], diffuse_feat
+                )
+                # color = diffuse#.clamp(0, 1)
                 color = (specular_feat + diffuse).clamp(0, 1)
                 # outputs[Nerf2MeshFieldHeadNames.SPECULAR] = specular_feat
                 mask_rgb = color
-        
+
             rgbs[mask_flatten] = mask_rgb.float()
 
         rgbs = rgbs.view(1, H, W, 3)
@@ -379,7 +400,7 @@ class Nerf2MeshFieldStage1(Field):
 
         self.triangles_errors_id = trig_id
 
-        #TODO: check if bg color is needed
+        # TODO: check if bg color is needed
         # image = image + T * bg_color
 
         image = image.view(*prefix, 3)

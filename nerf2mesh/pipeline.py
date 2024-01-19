@@ -39,9 +39,11 @@ class Nerf2MeshPipeline(VanillaPipeline):
         self.model.train_mvp = self.datamanager.train_dataset.metadata["mvps"].to(
             self.model.device
         )
+        self.model.field.train_mvp = self.model.train_mvp
         self.model.eval_mvp = self.datamanager.eval_dataset.metadata["mvps"].to(
             self.model.device
         )
+        self.model.field.evel_mvp = self.model.eval_mvp
         self.model.image_height = self.datamanager.train_dataset.cameras.image_height[
             0
         ].item()

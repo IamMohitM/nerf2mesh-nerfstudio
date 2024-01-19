@@ -1,6 +1,8 @@
-from typing import Type, Dict
+from typing import Type, Dict, Optional
 from dataclasses import dataclass, field
 from nerfstudio.data.pixel_samplers import PixelSampler, PixelSamplerConfig
+from nerfstudio.model_components.ray_samplers import UniformSampler
+from nerfstudio.cameras.rays import RayBundle, RaySamples
 
 import torch
 
@@ -29,7 +31,20 @@ class AllPixelSampler(PixelSampler):
         pixels = torch.cat((image_index.repeat(pixels.shape[0], 1), pixels), dim=1)
 
         collated_batch = {}
-        collated_batch['image'] = image_batch['image']
+        collated_batch['image'] = image_batch['image'][image_index]
         collated_batch['indices'] = pixels
 
         return collated_batch
+    
+
+
+class MetaDataUniformSampler(UniformSampler):
+    def generate_ray_samples(
+        self,
+        ray_bundle: Optional[RayBundle] = None,
+        num_samples: Optional[int] = None,
+    ) -> RaySamples: 
+        ray_samples = super().generate_ray_samples(ray_bundle, num_samples)
+        ray_samples.metadata.update(ray_bundle.metadata)
+        return ray_samples
+        
