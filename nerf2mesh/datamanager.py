@@ -20,18 +20,6 @@ class Nerf2MeshDataManagerConfig(VanillaDataManagerConfig):
 class Nerf2MeshDataManager(VanillaDataManager):
     config: Nerf2MeshDataManagerConfig
     
-    def _get_pixel_sampler(self, dataset: TDataset, num_rays_per_batch: int) -> PixelSampler:
-        """Infer pixel sampler to use."""
-        if self.config.patch_size > 1 and type(self.config.pixel_sampler) is PixelSamplerConfig:
-            return PatchPixelSamplerConfig().setup(
-                patch_size=self.config.patch_size, num_rays_per_batch=num_rays_per_batch
-            )
-        is_equirectangular = (dataset.cameras.camera_type == CameraType.EQUIRECTANGULAR.value).all()
-        if is_equirectangular.any():
-            CONSOLE.print("[bold yellow]Warning: Some cameras are equirectangular, but using default pixel sampler.")
-        return self.config.pixel_sampler.setup(
-            is_equirectangular=is_equirectangular, num_rays_per_batch=num_rays_per_batch
-        )
         
 @dataclass
 class Nerf2MeshDataManagerStage1Config(Nerf2MeshDataManagerConfig):
@@ -54,10 +42,5 @@ class Nerf2MeshDataStage1Manager(Nerf2MeshDataManager):
                     self.eval_dataset.cameras.to(self.device),
                     self.eval_camera_optimizer,
                 )
-    
-    # def _get_pixel_sampler(self, dataset: TDataset, num_rays_per_batch: int) -> PixelSampler:
-    #     """Infer pixel sampler to use."""
-        # return AllPixelSamplerConfig().setup()
-
     
 
