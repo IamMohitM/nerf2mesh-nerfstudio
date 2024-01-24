@@ -268,7 +268,6 @@ class Nerf2MeshFieldStage1(Field):
             f"Loaded coarse mesh: vertices - {self.vertices.shape}, triangles - {self.triangles.shape}"
         )
 
-    # TODO: perhaps dont' add height and width to forward and maybe include in raysamples
     def forward(
         self, ray_samples: RaySamples, compute_normals: bool = False
     ) -> Dict[Nerf2MeshFieldHeadNames, Tensor]:
@@ -308,6 +307,7 @@ class Nerf2MeshFieldStage1(Field):
             dirs = directions.view(-1, 3).contiguous()
 
         dirs = get_normalized_directions(dirs)
+        dirs = self.safe_normalize(dirs)
 
         results = {}
 
@@ -400,8 +400,7 @@ class Nerf2MeshFieldStage1(Field):
 
         self.triangles_errors_id = trig_id
 
-        # TODO: check if bg color is needed
-        # image = image + T * bg_color
+        image = image + T * torch.zeros_like(image) #bg_color
 
         image = image.view(*prefix, 3)
         depth = depth.view(*prefix)
