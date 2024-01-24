@@ -25,6 +25,7 @@ class Nerf2MeshDataManager(VanillaDataManager):
 class Nerf2MeshDataManagerStage1Config(Nerf2MeshDataManagerConfig):
     _target: type = field(default_factory=lambda: Nerf2MeshDataStage1Manager)
     pixel_sampler: PixelSamplerConfig = AllPixelSamplerConfig()
+    dataparser: AnnotatedDataParserUnion = Nerf2MeshDataParserConfig(eval_mode='all')
 
 class Nerf2MeshDataStage1Manager(Nerf2MeshDataManager):
     config: Nerf2MeshDataManagerConfig

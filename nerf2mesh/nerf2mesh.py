@@ -1120,7 +1120,7 @@ class Nerf2MeshStage1Model(NGPModel):
         metrics_dict = {}
         metrics_dict["psnr"] = self.psnr(outputs["rgb"], image[..., :3]).item()
         t: torch.tensor = outputs['rgb'].detach().cpu()
-        image
+        im = image[0].detach().cpu()
         # metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
         return metrics_dict
 
@@ -1131,6 +1131,9 @@ class Nerf2MeshStage1Model(NGPModel):
         params["vertices_offsets"] = [self.field.vertices_offsets]
 
         return params
+    
+    def get_outputs_for_camera_ray_bundle(self, camera_ray_bundle: RayBundle) -> Dict[str, torch.Tensor]:
+        return {}
     
 
 
