@@ -13,7 +13,7 @@ class Nerf2MeshTrainerConfig(TrainerConfig):
 
 class Nerf2MeshTrainer(Trainer):
     config: Nerf2MeshTrainerConfig
-    pipeline_stage1: Nerf2MeshPipelineStage1Config()
+    pipeline_stage1: Nerf2MeshPipelineStage1Config
 
     # recursively update one config with another but ignore one specific key
     def update_dict(self, d, u, u_type, ignore_key="_target"):
