@@ -145,14 +145,11 @@ class Nerf2MeshField(Field):
         return field_outputs
 
     def get_density(self, ray_samples: RaySamples) -> Tuple[Tensor, Optional[Tensor]]:
-        positions = SceneBox.get_normalized_positions(
-            ray_samples.frustums.get_positions(), self.aabb
-        )
-        selector = ((positions > 0.0) & (positions < 1.0)).all(dim=-1)
-        positions = positions * selector[..., None]
+        
+        positions = ray_samples.frustums.get_positions()
+        positions = positions
         h = self.density_mlp(positions)
         density = trunc_exp(h.to(positions))
-        density = density * selector[..., None]
         return density, None
 
     def _get_diffuse_color(self, x, c=None):
@@ -243,7 +240,7 @@ class Nerf2MeshFieldStage1(Field):
             v_cum_sum.append(v_cum_sum[-1] + len(mesh.vertices))
             f_cumsum.append(f_cumsum[-1] + len(mesh.faces))
 
-        vertices = np.concatenate(vertices, axis=0)
+        vertices = np.concatenate(vertices, axis=0)# * 0.3333
         triangles = np.concatenate(triangles, axis=0)
         self.v_cum_sum = np.array(v_cum_sum)
         self.f_cumsum = np.array(f_cumsum)
@@ -307,7 +304,7 @@ class Nerf2MeshFieldStage1(Field):
             dirs = directions.view(-1, 3).contiguous()
 
         dirs = get_normalized_directions(dirs)
-        dirs = self.safe_normalize(dirs)
+        # dirs = self.safe_normalize(dirs)
 
         results = {}
 

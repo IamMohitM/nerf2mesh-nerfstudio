@@ -178,21 +178,21 @@ class Nerf2MeshDataParser(InstantNGP):
             dataparser_output.cameras.width[0].item()
             / dataparser_output.cameras.height[0].item()
         )
-        projection = torch.tensor(
-            [
-                [2 * self.config.min_near, 0, 0, 0],
-                [0, -2 * self.config.min_near, 0, 0],
-                [
-                    0,
-                    0,
-                    -(self.config.max_far + self.config.min_near)
-                    / (self.config.max_far - self.config.min_near),
-                    -(2 * self.config.max_far * self.config.min_near)
-                    / (self.config.max_far - self.config.min_near),
-                ],
-                [0, 0, -1, 0],
-            ]
-        )
+        # projection = torch.tensor(
+        #     [
+        #         [2 * self.config.min_near, 0, 0, 0],
+        #         [0, -2 * self.config.min_near, 0, 0],
+        #         [
+        #             0,
+        #             0,
+        #             -(self.config.max_far + self.config.min_near)
+        #             / (self.config.max_far - self.config.min_near),
+        #             -(2 * self.config.max_far * self.config.min_near)
+        #             / (self.config.max_far - self.config.min_near),
+        #         ],
+        #         [0, 0, -1, 0],
+        #     ]
+        # )
         projection = torch.tensor(
             [
                 [1 / (y * aspect), 0, 0, 0],
@@ -219,7 +219,7 @@ class Nerf2MeshDataParser(InstantNGP):
             ],
             dim=1,
         )
-        mvps = projection.unsqueeze(0) @ torch.inverse(new_poses)
+        mvps = projection.unsqueeze(0) @ torch.inverse(new_poses) 
         dataparser_output.metadata["mvps"] = mvps
 
         return dataparser_output

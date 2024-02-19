@@ -420,7 +420,7 @@ class Nerf2MeshModel(NGPModel):
         else:
             vertices, triangles = mcubes.marching_cubes(sigmas, density_thresh)
 
-        vertices = vertices / (resolution - 0.5) * 2 - 0.5
+        vertices = vertices / (resolution - 1) * 2 - 1
         vertices = vertices.astype(np.float32)
         triangles = triangles.astype(np.int32)
 

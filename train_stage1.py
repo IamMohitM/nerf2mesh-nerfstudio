@@ -5,10 +5,14 @@ from nerf2mesh.config import nerf2mesh
 def nerf_train(data, output_dir):
     config = nerf2mesh.config
     config.set_timestamp()
-    
-    config.pipeline.datamanager.data = pathlib.Path(data)
-    config.pipeline.model.mark_unseen_triangles = True
+    config.stage = 1
+    config.load_dir = pathlib.Path("outputs/chair+mesh/nerf2mesh_mark_unseen/chair/nerf2mesh/2024-02-18_225635/nerfstudio_models")
     config.pipeline.model.coarse_mesh_path = "meshes/mesh_0_with_unseenmarked.ply"
+    config.pipeline.model.fine_mesh_path = "meshes/"
+    config.pipeline.datamanager.data = pathlib.Path(data)
+    
+    
+    config.pipeline.model.mark_unseen_triangles = True
     config.output_dir = output_dir
     config.save_config()
     trainer = config.setup()
