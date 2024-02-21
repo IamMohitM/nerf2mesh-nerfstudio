@@ -85,7 +85,7 @@ class Nerf2MeshField(Field):
         )
 
         self.sigma_net = MLP(
-            in_dim=self.encoder.get_out_dim(),
+            in_dim=self.encoder.get_out_dim() + 3,
             out_dim=1,
             num_layers=num_layers_sigma,
             layer_width=hidden_dim_sigma,
@@ -93,7 +93,6 @@ class Nerf2MeshField(Field):
             out_activation=None,
             implementation=implementation,
         )
-        self.density_mlp = torch.nn.Sequential(self.encoder, self.sigma_net)
 
         self.encoder_color = HashEncoding(
             num_levels=num_levels_color_encoder,
@@ -147,8 +146,9 @@ class Nerf2MeshField(Field):
     def get_density(self, ray_samples: RaySamples) -> Tuple[Tensor, Optional[Tensor]]:
         
         positions = ray_samples.frustums.get_positions()
-        positions = positions
-        h = self.density_mlp(positions)
+        h = self.encoder(positions)
+        h = torch.cat([positions, h], dim=-1)
+        h = self.sigma_net(h)
         density = trunc_exp(h.to(positions))
         return density, None
 

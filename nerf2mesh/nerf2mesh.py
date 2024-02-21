@@ -425,12 +425,12 @@ class Nerf2MeshModel(NGPModel):
         triangles = triangles.astype(np.int32)
 
         ### visibility test.
-        if self.config.mark_unseen_triangles and self.all_mvps is not None:
+        if self.config.mark_unseen_triangles and self.train_mvp is not None:
             visibility_mask = (
                 self.mark_unseen_triangles(
                     vertices,
                     triangles,
-                    self.all_mvps,
+                    self.train_mvp,
                     self.image_height,
                     self.image_width,
                 )
@@ -583,7 +583,6 @@ class Nerf2MeshModel(NGPModel):
                 all_indices = torch.arange(
                     reso**3, device=self.device, dtype=torch.int
                 )
-                # all_coords = raymarching.morton3D_invert(all_indices).cpu().numpy()
 
                 # for each cas >= 1
                 for cas in range(1, self.cascade):
@@ -744,206 +743,6 @@ class Nerf2MeshModel(NGPModel):
         print(f"[mark unseen trigs] {mask.sum()} from {mask.shape[0]}")
 
         return mask  # [N]
-
-    @torch.no_grad()
-    def export_stage1(self, path, h0=2048, w0=2048, png_compression_level=3):
-        # png_compression_level: 0 is no compression, 9 is max (default will be 3)
-
-        device = self.field_2.vertices.device
-        if self.glctx is None:
-            self.glctx = dr.RasterizeGLContext(output_db=False)
-
-        def _export_obj(v, f, h0, w0, ssaa=1, cas=0):
-            # v, f: torch Tensor
-
-            v_np = v.cpu().numpy()  # [N, 3]
-            f_np = f.cpu().numpy()  # [M, 3]
-
-            print(
-                f"[INFO] running xatlas to unwrap UVs for mesh: v={v_np.shape} f={f_np.shape}"
-            )
-
-            # unwrap uv in contracted space
-            atlas = xatlas.Atlas()
-            atlas.add_mesh(contract(v_np) if self.config.contract else v_np, f_np)
-            chart_options = xatlas.ChartOptions()
-            chart_options.max_iterations = 0  # disable merge_chart for faster unwrap...
-            pack_options = xatlas.PackOptions()
-            # pack_options.blockAlign = True
-            # pack_options.bruteForce = False
-            atlas.generate(chart_options=chart_options, pack_options=pack_options)
-            vmapping, ft_np, vt_np = atlas[0]  # [N], [M, 3], [N, 2]
-
-            # vmapping, ft_np, vt_np = xatlas.parametrize(v_np, f_np) # [N], [M, 3], [N, 2]
-
-            vt = torch.from_numpy(vt_np.astype(np.float32)).float().to(device)
-            ft = torch.from_numpy(ft_np.astype(np.int64)).int().to(device)
-
-            # render uv maps
-            uv = vt * 2.0 - 1.0  # uvs to range [-1, 1]
-            uv = torch.cat(
-                (uv, torch.zeros_like(uv[..., :1]), torch.ones_like(uv[..., :1])),
-                dim=-1,
-            )  # [N, 4]
-
-            if ssaa > 1:
-                h = int(h0 * ssaa)
-                w = int(w0 * ssaa)
-            else:
-                h, w = h0, w0
-
-            rast, _ = dr.rasterize(
-                self.glctx, uv.unsqueeze(0), ft, (h, w)
-            )  # [1, h, w, 4]
-            xyzs, _ = dr.interpolate(v.unsqueeze(0), rast, f)  # [1, h, w, 3]
-            mask, _ = dr.interpolate(
-                torch.ones_like(v[:, :1]).unsqueeze(0), rast, f
-            )  # [1, h, w, 1]
-
-            # masked query
-            xyzs = xyzs.view(-1, 3)
-            mask = (mask > 0).view(-1)
-
-            # TODO: add contract support
-            if self.config.contract:
-                xyzs = contract(xyzs)
-
-            feats = torch.zeros(h * w, 6, device=device, dtype=torch.float32)
-
-            if mask.any():
-                xyzs = xyzs[mask]  # [M, 3]
-
-                # check individual codes
-                # if self.config.individual_dim > 0:
-                #     ind_code = self.individual_codes[[0]]
-                # else:
-                #     ind_code = None
-                ind_code = None
-
-                # batched inference to avoid OOM
-                all_feats = []
-                head = 0
-                while head < xyzs.shape[0]:
-                    tail = min(head + 640000, xyzs.shape[0])
-                    with torch.cuda.amp.autocast(enabled=True):
-                        all_feats.append(
-                            self.field._get_diffuse_color(
-                                xyzs[head:tail], ind_code
-                            ).float()
-                        )
-                    head += 640000
-
-                feats[mask] = torch.cat(all_feats, dim=0)
-
-            feats = feats.view(h, w, -1)  # 6 channels
-            mask = mask.view(h, w)
-
-            # quantize [0.0, 1.0] to [0, 255]
-            feats = feats.cpu().numpy()
-            feats = (feats * 255).astype(np.uint8)
-
-            ### NN search as a queer antialiasing ...
-            mask = mask.cpu().numpy()
-
-            inpaint_region = binary_dilation(mask, iterations=32)  # pad width
-            inpaint_region[mask] = 0
-
-            search_region = mask.copy()
-            not_search_region = binary_erosion(search_region, iterations=3)
-            search_region[not_search_region] = 0
-
-            search_coords = np.stack(np.nonzero(search_region), axis=-1)
-            inpaint_coords = np.stack(np.nonzero(inpaint_region), axis=-1)
-
-            knn = NearestNeighbors(n_neighbors=1, algorithm="kd_tree").fit(
-                search_coords
-            )
-            _, indices = knn.kneighbors(inpaint_coords)
-
-            feats[tuple(inpaint_coords.T)] = feats[
-                tuple(search_coords[indices[:, 0]].T)
-            ]
-
-            # do ssaa after the NN search, in numpy
-            feats0 = cv2.cvtColor(feats[..., :3], cv2.COLOR_RGB2BGR)  # albedo
-            feats1 = cv2.cvtColor(
-                feats[..., 3:], cv2.COLOR_RGB2BGR
-            )  # visibility features
-
-            if ssaa > 1:
-                feats0 = cv2.resize(feats0, (w0, h0), interpolation=cv2.INTER_LINEAR)
-                feats1 = cv2.resize(feats1, (w0, h0), interpolation=cv2.INTER_LINEAR)
-
-            os.makedirs(path, exist_ok=True)
-            # cv2.imwrite(os.path.join(path, f'feat0_{cas}.png'), feats0, [int(cv2.IMWRITE_PNG_COMPRESSION), png_compression_level])
-            # cv2.imwrite(os.path.join(path, f'feat1_{cas}.png'), feats1, [int(cv2.IMWRITE_PNG_COMPRESSION), png_compression_level])
-            cv2.imwrite(os.path.join(path, f"feat0_{cas}.jpg"), feats0)
-            cv2.imwrite(os.path.join(path, f"feat1_{cas}.jpg"), feats1)
-
-            # save obj (v, vt, f /)
-            obj_file = os.path.join(path, f"mesh_{cas}.obj")
-            mtl_file = os.path.join(path, f"mesh_{cas}.mtl")
-
-            print(f"[INFO] writing obj mesh to {obj_file}")
-            with open(obj_file, "w") as fp:
-                fp.write(f"mtllib mesh_{cas}.mtl \n")
-
-                print(f"[INFO] writing vertices {v_np.shape}")
-                for v in v_np:
-                    fp.write(f"v {v[0]} {v[1]} {v[2]} \n")
-
-                print(f"[INFO] writing vertices texture coords {vt_np.shape}")
-                for v in vt_np:
-                    fp.write(f"vt {v[0]} {1 - v[1]} \n")
-
-                print(f"[INFO] writing faces {f_np.shape}")
-                fp.write(f"usemtl defaultMat \n")
-                for i in range(len(f_np)):
-                    fp.write(
-                        f"f {f_np[i, 0] + 1}/{ft_np[i, 0] + 1} {f_np[i, 1] + 1}/{ft_np[i, 1] + 1} {f_np[i, 2] + 1}/{ft_np[i, 2] + 1} \n"
-                    )
-
-            with open(mtl_file, "w") as fp:
-                fp.write(f"newmtl defaultMat \n")
-                fp.write(f"Ka 1 1 1 \n")
-                fp.write(f"Kd 1 1 1 \n")
-                fp.write(f"Ks 0 0 0 \n")
-                fp.write(f"Tr 1 \n")
-                fp.write(f"illum 1 \n")
-                fp.write(f"Ns 0 \n")
-                fp.write(f"map_Kd feat0_{cas}.jpg \n")
-
-        v = (self.field_2.vertices + self.field_2.vertices_offsets).detach()
-        f = self.field_2.triangles.detach()
-
-        for cas in range(self.config.grid_levels):
-            cur_v = v[self.field_2.v_cum_sum[cas] : self.field_2.v_cum_sum[cas + 1]]
-            cur_f = (
-                f[self.field_2.f_cumsum[cas] : self.field_2.f_cumsum[cas + 1]]
-                - self.field_2.v_cum_sum[cas]
-            )
-            _export_obj(cur_v, cur_f, h0, w0, self.field_2.super_sample, cas)
-
-            # half the texture resolution for remote area.
-            # if not self.opt.sdf and h0 > 2048 and w0 > 2048:
-            #     h0 //= 2
-            #     w0 //= 2
-
-        # save mlp as json
-        params = dict(self.field.specular_net.named_parameters())
-
-        mlp = {}
-        for k, p in params.items():
-            p_np = p.detach().cpu().numpy().T
-            print(f"[INFO] wrting MLP param {k}: {p_np.shape}")
-            mlp[k] = p_np.tolist()
-
-        mlp["bound"] = self.bound.item()
-        mlp["cascade"] = self.config.grid_levels
-
-        mlp_file = os.path.join(path, f"mlp.json")
-        with open(mlp_file, "w") as fp:
-            json.dump(mlp, fp, indent=2)
 
 
 @dataclass
