@@ -14,4 +14,5 @@ You can also use the launch.json in the .vscode for starting debugging sessions.
 # TODO
 - [x] Implement NerFModel from nerf2mesh - use Nerfstudio API
 - [x] Fix coarse mesh - stage 0 bugs
-- [-] Implement Stage 1 from Nerf2mesh
+- [X] Implement Stage 1 from Nerf2mesh
+- [-] Add support for bound > 1

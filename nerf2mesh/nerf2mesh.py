@@ -372,9 +372,9 @@ class Nerf2MeshModel(NGPModel):
         else:
             # query
 
-            X = torch.linspace(-0.5, 0.5, resolution).split(S)
-            Y = torch.linspace(-0.5, 0.5, resolution).split(S)
-            Z = torch.linspace(-0.5, 0.5, resolution).split(S)
+            X = torch.linspace(-1, 1, resolution).split(S)
+            Y = torch.linspace(-1, 1, resolution).split(S)
+            Z = torch.linspace(-1, 1, resolution).split(S)
 
             for xi, xs in enumerate(X):
                 for yi, ys in enumerate(Y):

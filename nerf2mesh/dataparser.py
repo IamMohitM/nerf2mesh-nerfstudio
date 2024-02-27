@@ -129,7 +129,7 @@ class Nerf2MeshDataParser(InstantNGP):
 
         # in x,y,z order
         # assumes that the scene is centered at the origin
-        aabb_scale = 0.5 * meta.get("aabb_scale", 1)
+        aabb_scale = meta.get("aabb_scale", 1)
 
         scene_box = SceneBox(
             aabb=torch.tensor(
