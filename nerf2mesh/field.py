@@ -174,11 +174,7 @@ class Nerf2MeshField(Field):
         density_embedding: Tensor = None,
     ) -> Dict[Nerf2MeshFieldHeadNames, Tensor]:
         outputs = {}
-        positions = SceneBox.get_normalized_positions(
-            ray_samples.frustums.get_positions(), self.aabb
-        )
-        selector = ((positions > 0.0) & (positions < 1.0)).all(dim=-1)
-        positions = positions * selector[..., None]
+        positions = ray_samples.frustums.get_positions()
         diffuse_feat = self._get_diffuse_color(positions)
         diffuse = diffuse_feat[..., :3]
         if shading == Shading.diffuse:
