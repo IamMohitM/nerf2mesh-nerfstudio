@@ -314,8 +314,10 @@ class Nerf2MeshFieldStage1(Field):
             .unsqueeze(0)
         )
 
+        #estimates if pixel part of the geometry
         rast, _ = dr.rasterize(self.glctx, vertices_clip, self.triangles, (H, W))
 
+        #estimate color of the pixel
         xyzs, _ = dr.interpolate(
             vertices.unsqueeze(0), rast, self.triangles
         )  # [1, H, W, 3]

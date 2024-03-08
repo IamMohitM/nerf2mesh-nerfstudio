@@ -44,7 +44,6 @@ class Nerf2MeshDataStage1Manager(Nerf2MeshDataManager):
         super().setup_train()
         self.train_ray_generator = SimpleRayGenerator(
                     self.train_dataset.cameras.to(self.device),
-                    self.train_camera_optimizer,
                 )
         
         
@@ -52,7 +51,6 @@ class Nerf2MeshDataStage1Manager(Nerf2MeshDataManager):
         super().setup_eval()
         self.eval_ray_generator = SimpleRayGenerator(
                     self.eval_dataset.cameras.to(self.device),
-                    self.eval_camera_optimizer,
                 )
     
 

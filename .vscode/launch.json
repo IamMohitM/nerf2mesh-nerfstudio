@@ -62,13 +62,12 @@
             "justMyCode": false,
             "env": {
                 "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
-                "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
                 "TORCH_EXTENSIONS_DIR": "temp/torch_extensions",
                 "CUDA_VISIBLE_DEVICES": "0"
             },
             "args": [
                 "--data",
-                "~/datasets/nerf_synthetic_small/nerf_synthetic/hotdog/",
+                "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/",
                 "--output_dir",
                 "outputs/chair+mesh/nerf2mesh_mark_unseen"
             ]
