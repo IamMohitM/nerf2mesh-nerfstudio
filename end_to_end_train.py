@@ -21,6 +21,7 @@ def nerf_train(data, output_dir):
 
 
     config.stage = 1
+    config.mixed_precision = False
     config.max_num_iterations=5000
     config.load_dir = checkpoint_dir
     config.pipeline.model.fine_mesh_path = config.pipeline.model.coarse_mesh_path.parent

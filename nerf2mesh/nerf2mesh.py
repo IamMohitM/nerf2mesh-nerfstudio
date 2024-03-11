@@ -15,12 +15,10 @@ from torch.nn import Parameter
 from torchmetrics.functional import structural_similarity_index_measure
 from torchmetrics.image import PeakSignalNoiseRatio
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-import lpips
 
 from nerfstudio.cameras.rays import RayBundle
-from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.models.instant_ngp import NGPModel, InstantNGPModelConfig
-from nerfstudio.model_components.ray_samplers import VolumetricSampler, UniformSampler
+from nerfstudio.model_components.ray_samplers import VolumetricSampler
 
 from nerfstudio.model_components.renderers import (
     RGBRenderer,
@@ -43,7 +41,6 @@ from nerf2mesh.utils import (
     remove_masked_trigs,
     remove_selected_verts,
     decimate_mesh,
-    uncontract,
     laplacian_smooth_loss,
     contract,
 )
@@ -70,14 +67,13 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     render_step_size: Optional[float] = None
     """Minimum step size for rendering."""
 
-    disable_scene_contraction: bool = True
     # near_plane: float=0.01
 
     hidden_dim_sigma: int = 32
     hidden_dim_color: int = 64
     num_levels_sigma_encoder: int = 16
     num_levels_color_encoder: int = 16
-    n_features_per_level_sigma_encoder: int = 1
+    n_features_per_level_sigma_encoder: int = 2
     n_features_per_level_color_encoder: int = 2
     base_resolution: int = 16  # starting resolution
     desired_resolution: int = 2048  # ending resolution
@@ -120,7 +116,7 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     stage: int = 0
     enable_offset_nerf_grad: bool = False
 
-    lambda_lap: float = 0  # 0.001
+    lambda_lap: float = 0.001
     lambda_offsets: float = 0.1
     fine_mesh_path: str = "meshes/stage_1"
     texture_size: float = 4096
@@ -466,50 +462,75 @@ class Nerf2MeshModel(NGPModel):
 
         # for the outer mesh [1, inf]
         if self.bound > 1:
-            if self.config.sdf:
-                # assume background contracted in [-2, 2], process it specially
-                sigmas = torch.zeros(
-                    [resolution] * 3, dtype=torch.float32, device=self.device
+
+            reso = self.config.grid_resolution
+            target_reso = self.config.env_reso
+            decimate_target //= 2  # empirical...
+
+            all_indices = torch.arange(
+                reso**3, device=self.device, dtype=torch.int
+            )
+
+            # for each cas >= 1
+            for cas in range(1, self.cascade):
+                bound = min(2**cas, self.bound)
+                half_grid_size = bound / target_reso
+
+                # remap from density_grid
+                occ = torch.zeros(
+                    [reso] * 3, dtype=torch.float32, device=self.device
                 )
-                for xi, xs in enumerate(X):
-                    for yi, ys in enumerate(Y):
-                        for zi, zs in enumerate(Z):
-                            xx, yy, zz = torch.meshgrid(xs, ys, zs, indexing="ij")
-                            pts = 2 * torch.cat(
-                                [
-                                    xx.reshape(-1, 1),
-                                    yy.reshape(-1, 1),
-                                    zz.reshape(-1, 1),
-                                ],
-                                dim=-1,
-                            )  # [S, 3]
-                            with torch.cuda.amp.autocast(enabled=self.config.fp16):
-                                val = self.density(pts.to(self.device))  # [S, 1]
-                            sigmas[
-                                xi * S : xi * S + len(xs),
-                                yi * S : yi * S + len(ys),
-                                zi * S : zi * S + len(zs),
-                            ] = val.reshape(len(xs), len(ys), len(zs))
-                sigmas = torch.nan_to_num(sigmas, 0)
-                sigmas = sigmas.cpu().numpy()
+                occ[all_indices] = self.occupancy_grid[cas]
 
-                vertices_out, triangles_out = mcubes.marching_cubes(-sigmas, 0)
+            # remove the center (before mcubes)
+                # occ[reso // 4 : reso * 3 // 4, reso // 4 : r  eso * 3 // 4, reso // 4 : reso * 3 // 4] = 0
 
-                vertices_out = vertices_out / (resolution - 1.0) * 2 - 1
-                vertices_out = vertices_out.astype(np.float32)
-                triangles_out = triangles_out.astype(np.int32)
+                # interpolate the occ grid to desired resolution to control mesh size...
+                occ = (
+                    F.interpolate(
+                        occ.unsqueeze(0).unsqueeze(0),
+                        [target_reso] * 3,
+                        mode="trilinear",
+                    )
+                    .squeeze(0)
+                    .squeeze(0)
+                )
+                occ = torch.nan_to_num(occ, 0)
+                occ = (occ > density_thresh).cpu().numpy()
 
-                _r = 0.5
+                vertices_out, triangles_out = mcubes.marching_cubes(occ, 0.5)
+
+                vertices_out = (
+                    vertices_out / (target_reso - 1.0) * 2 - 1
+                )  # range in [-1, 1]
+
+                # remove the center (already covered by previous cascades)
+                _r = 0.45
                 vertices_out, triangles_out = remove_selected_verts(
                     vertices_out,
                     triangles_out,
                     f"(x <= {_r}) && (x >= -{_r}) && (y <= {_r}) && (y >= -{_r}) && (z <= {_r} ) && (z >= -{_r})",
                 )
-
-                bound = 2
-                half_grid_size = bound / resolution
+                if vertices_out.shape[0] == 0:
+                    continue
 
                 vertices_out = vertices_out * (bound - half_grid_size)
+
+                # remove the out-of-AABB region
+                xmn, ymn, zmn, xmx, ymx, zmx = (
+                    self.aabb_train.cpu().numpy().tolist()
+                )
+                xmn += half_grid_size
+                ymn += half_grid_size
+                zmn += half_grid_size
+                xmx -= half_grid_size
+                ymx -= half_grid_size
+                zmx -= half_grid_size
+                vertices_out, triangles_out = remove_selected_verts(
+                    vertices_out,
+                    triangles_out,
+                    f"(x <= {xmn}) || (x >= {xmx}) || (y <= {ymn}) || (y >= {ymx}) || (z <= {zmn} ) || (z >= {zmx})",
+                )
 
                 # clean mesh
                 vertices_out, triangles_out = clean_mesh(
@@ -521,8 +542,10 @@ class Nerf2MeshModel(NGPModel):
                     remesh=False,
                 )
 
+                if vertices_out.shape[0] == 0:
+                    continue
+
                 # decimate
-                decimate_target *= 2
                 if decimate_target > 0 and triangles_out.shape[0] > decimate_target:
                     vertices_out, triangles_out = decimate_mesh(
                         vertices_out,
@@ -534,18 +557,11 @@ class Nerf2MeshModel(NGPModel):
                 vertices_out = vertices_out.astype(np.float32)
                 triangles_out = triangles_out.astype(np.int32)
 
-                # warp back (uncontract)
-                vertices_out = uncontract(vertices_out)
-
-                # remove the out-of-AABB region
-                xmn, ymn, zmn, xmx, ymx, zmx = self.aabb_train.cpu().numpy().tolist()
-                vertices_out, triangles_out = remove_selected_verts(
-                    vertices_out,
-                    triangles_out,
-                    f"(x <= {xmn}) || (x >= {xmx}) || (y <= {ymn}) || (y >= {ymx}) || (z <= {zmn} ) || (z >= {zmx})",
+                print(
+                    f"[INFO] exporting outer mesh at cas {cas}, v = {vertices_out.shape}, f = {triangles_out.shape}"
                 )
 
-                if self.config.mark_unseen_triangles and self.all_mvps is not None:
+                if self.all_mvps is not None:
                     visibility_mask = (
                         self.mark_unseen_triangles(
                             vertices_out,
@@ -564,140 +580,11 @@ class Nerf2MeshModel(NGPModel):
                         dilation=self.config.visibility_mask_dilation,
                     )
 
-                print(
-                    f"[INFO] exporting outer mesh at cas 1, v = {vertices_out.shape}, f = {triangles_out.shape}"
-                )
-
                 # vertices_out, triangles_out = clean_mesh(vertices_out, triangles_out, min_f=self.opt.clean_min_f, min_d=self.opt.clean_min_d, repair=False, remesh=False)
                 mesh_out = trimesh.Trimesh(
                     vertices_out, triangles_out, process=False
                 )  # important, process=True leads to seg fault...
-                mesh_out.export(os.path.join(save_path, f"mesh_1.ply"))
-
-            else:
-                # TODO: fix this - density grid and morton code should not be used
-                reso = self.config.grid_resolution
-                target_reso = self.config.env_reso
-                decimate_target //= 2  # empirical...
-
-                all_indices = torch.arange(
-                    reso**3, device=self.device, dtype=torch.int
-                )
-
-                # for each cas >= 1
-                for cas in range(1, self.cascade):
-                    bound = min(2**cas, self.bound)
-                    half_grid_size = bound / target_reso
-
-                    # remap from density_grid
-                    occ = torch.zeros(
-                        [reso] * 3, dtype=torch.float32, device=self.device
-                    )
-                    occ[tuple(all_coords.T)] = self.density_grid[cas]
-
-                    # remove the center (before mcubes)
-                    # occ[reso // 4 : reso * 3 // 4, reso // 4 : r  eso * 3 // 4, reso // 4 : reso * 3 // 4] = 0
-
-                    # interpolate the occ grid to desired resolution to control mesh size...
-                    occ = (
-                        F.interpolate(
-                            occ.unsqueeze(0).unsqueeze(0),
-                            [target_reso] * 3,
-                            mode="trilinear",
-                        )
-                        .squeeze(0)
-                        .squeeze(0)
-                    )
-                    occ = torch.nan_to_num(occ, 0)
-                    occ = (occ > density_thresh).cpu().numpy()
-
-                    vertices_out, triangles_out = mcubes.marching_cubes(occ, 0.5)
-
-                    vertices_out = (
-                        vertices_out / (target_reso - 1.0) * 2 - 1
-                    )  # range in [-1, 1]
-
-                    # remove the center (already covered by previous cascades)
-                    _r = 0.45
-                    vertices_out, triangles_out = remove_selected_verts(
-                        vertices_out,
-                        triangles_out,
-                        f"(x <= {_r}) && (x >= -{_r}) && (y <= {_r}) && (y >= -{_r}) && (z <= {_r} ) && (z >= -{_r})",
-                    )
-                    if vertices_out.shape[0] == 0:
-                        continue
-
-                    vertices_out = vertices_out * (bound - half_grid_size)
-
-                    # remove the out-of-AABB region
-                    xmn, ymn, zmn, xmx, ymx, zmx = (
-                        self.aabb_train.cpu().numpy().tolist()
-                    )
-                    xmn += half_grid_size
-                    ymn += half_grid_size
-                    zmn += half_grid_size
-                    xmx -= half_grid_size
-                    ymx -= half_grid_size
-                    zmx -= half_grid_size
-                    vertices_out, triangles_out = remove_selected_verts(
-                        vertices_out,
-                        triangles_out,
-                        f"(x <= {xmn}) || (x >= {xmx}) || (y <= {ymn}) || (y >= {ymx}) || (z <= {zmn} ) || (z >= {zmx})",
-                    )
-
-                    # clean mesh
-                    vertices_out, triangles_out = clean_mesh(
-                        vertices_out,
-                        triangles_out,
-                        min_f=self.config.clean_min_f,
-                        min_d=self.config.clean_min_d,
-                        repair=False,
-                        remesh=False,
-                    )
-
-                    if vertices_out.shape[0] == 0:
-                        continue
-
-                    # decimate
-                    if decimate_target > 0 and triangles_out.shape[0] > decimate_target:
-                        vertices_out, triangles_out = decimate_mesh(
-                            vertices_out,
-                            triangles_out,
-                            decimate_target,
-                            optimalplacement=False,
-                        )
-
-                    vertices_out = vertices_out.astype(np.float32)
-                    triangles_out = triangles_out.astype(np.int32)
-
-                    print(
-                        f"[INFO] exporting outer mesh at cas {cas}, v = {vertices_out.shape}, f = {triangles_out.shape}"
-                    )
-
-                    if self.all_mvps is not None:
-                        visibility_mask = (
-                            self.mark_unseen_triangles(
-                                vertices_out,
-                                triangles_out,
-                                self.all_mvps,
-                                self.image_height,
-                                self.image_width,
-                            )
-                            .cpu()
-                            .numpy()
-                        )
-                        vertices_out, triangles_out = remove_masked_trigs(
-                            vertices_out,
-                            triangles_out,
-                            visibility_mask,
-                            dilation=self.config.visibility_mask_dilation,
-                        )
-
-                    # vertices_out, triangles_out = clean_mesh(vertices_out, triangles_out, min_f=self.opt.clean_min_f, min_d=self.opt.clean_min_d, repair=False, remesh=False)
-                    mesh_out = trimesh.Trimesh(
-                        vertices_out, triangles_out, process=False
-                    )  # important, process=True leads to seg fault...
-                    mesh_out.export(os.path.join(save_path, f"mesh_{cas}.ply"))
+                mesh_out.export(os.path.join(save_path, f"mesh_{cas}.ply"))
 
     @torch.no_grad()
     def mark_unseen_triangles(self, vertices, triangles, mvps, H, W):
@@ -751,7 +638,7 @@ class Nerf2MeshStage1ModelConfig(Nerf2MeshModelConfig):
     stage: int = 0
     enable_offset_nerf_grad: bool = False
     stage: int = 1
-    lambda_lap: float = 0  # 0.001
+    lambda_lap: float = 0.001
     lambda_offsets: float = 0.1
     fine_mesh_path: str = "meshes/stage_1"
     texture_size: float = 4096

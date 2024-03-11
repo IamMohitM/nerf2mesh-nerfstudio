@@ -6,11 +6,10 @@ def nerf_train(data, output_dir):
     config = nerf2mesh.config
     config.set_timestamp()
     config.stage = 1
-    config.load_dir = pathlib.Path("outputs/chair+mesh/nerf2mesh_mark_unseen/chair/nerf2mesh/2024-02-18_225635/nerfstudio_models")
-    config.pipeline.model.coarse_mesh_path = "meshes/mesh_0_with_unseenmarked.ply"
+    config.load_dir = pathlib.Path("outputs/lego/nerf2mesh_mark_unseen/lego/nerf2mesh/2024-03-09_114549/nerfstudio_models")
+    config.pipeline.model.coarse_mesh_path = config.load_dir.parent/  "meshes/mesh_0.ply"
     config.pipeline.model.fine_mesh_path = "meshes/"
     config.pipeline.datamanager.data = pathlib.Path(data)
-    
     
     config.pipeline.model.mark_unseen_triangles = True
     config.output_dir = output_dir

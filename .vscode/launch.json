@@ -42,20 +42,19 @@
             "justMyCode": false,
             "env": {
                 "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
-                "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
                 "TORCH_EXTENSIONS_DIR": "temp/torch_extensions",
                 "CUDA_VISIBLE_DEVICES": "0"
             },
             "args": [
                 "--data",
-                "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/",
+                "~/datasets/nerf_synthetic_small/nerf_synthetic/lego/",
                 "--output_dir",
-                "outputs/chair+mesh/nerf2mesh_mark_unseen"
+                "outputs/lego/nerf2mesh_mark_unseen"
             ]
         },
         {
             "name": "End to End Chair",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "end_to_end_train.py",
             "console": "integratedTerminal",
@@ -67,9 +66,10 @@
             },
             "args": [
                 "--data",
-                "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/",
+                "~/datasets/nerf_synthetic_small/nerf_synthetic/lego/",
+                // "/home/mohitm/datasets/nerf_kiri_poses/bella_pose//",
                 "--output_dir",
-                "outputs/chair+mesh/nerf2mesh_mark_unseen"
+                "outputs/"
             ]
         },
         {

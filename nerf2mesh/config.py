@@ -25,10 +25,10 @@ nerf2mesh = MethodSpecification(
                     # train_split_fraction=0.98,
                     eval_mode="all",
                 ),
-                train_num_rays_per_batch=8192,
-                eval_num_rays_per_batch=8192,
+                train_num_rays_per_batch=4096,
+                eval_num_rays_per_batch=4096,
             ),
-            model=Nerf2MeshModelConfig(eval_num_rays_per_chunk=8192),
+            model=Nerf2MeshModelConfig(eval_num_rays_per_chunk=4096),
         ),
         optimizers={
             "fields": {

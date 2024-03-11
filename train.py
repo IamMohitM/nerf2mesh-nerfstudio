@@ -7,6 +7,7 @@ def nerf_train(data, output_dir):
     config.set_timestamp()
     
     config.pipeline.datamanager.data = pathlib.Path(data)
+    config.max_num_iterations=5000
     config.pipeline.model.mark_unseen_triangles = True
     config.pipeline.model.coarse_mesh_path = "meshes/mesh_0_with_unseenmarked.ply"
     config.output_dir = output_dir
