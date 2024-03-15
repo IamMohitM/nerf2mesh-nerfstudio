@@ -66,7 +66,7 @@
             },
             "args": [
                 "--data",
-                "~/datasets/nerf_synthetic_small/nerf_synthetic/lego/",
+                "~/datasets/nerf_synthetic/chair/",
                 // "/home/mohitm/datasets/nerf_kiri_poses/bella_pose//",
                 "--output_dir",
                 "outputs/"
@@ -81,14 +81,14 @@
             "justMyCode": false,
             "env": {
                 "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
-                "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
+                // "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
                 "TORCH_EXTENSIONS_DIR": "temp/torch_extensions",
                 "CUDA_VISIBLE_DEVICES": "1"
             },
             "args": [
                 "nerf2mesh",
                 "--pipeline.datamanager.data",
-                "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/",
+                "~/datasets/nerf_synthetic/chair/",
                 "--max_num_iterations=10000",
                 "--output-dir",
                 "outputs/chair+mesh/nerf2mesh",
