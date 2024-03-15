@@ -6,7 +6,7 @@
     "configurations": [
         {
             "name": "Python: Current File",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
@@ -14,7 +14,7 @@
         },
         {
             "name": "Script Chair",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "train.py",
             "console": "integratedTerminal",
@@ -35,7 +35,7 @@
         },
         {
             "name": "Script Chair Stage 1",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "train_stage1.py",
             "console": "integratedTerminal",
@@ -67,14 +67,13 @@
             "args": [
                 "--data",
                 "~/datasets/nerf_synthetic/chair/",
-                // "/home/mohitm/datasets/nerf_kiri_poses/bella_pose//",
                 "--output_dir",
                 "outputs/"
             ]
         },
         {
             "name": "Train Chair",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
             "console": "integratedTerminal",
@@ -107,7 +106,7 @@
         },
         {
             "name": "Train Chair Stage 1",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
             "console": "integratedTerminal",
@@ -148,7 +147,7 @@
         },
         {
             "name": "Chair Stage 1 - From n2m",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
             "console": "integratedTerminal",
@@ -188,7 +187,7 @@
         
         {
             "name": "Train Chair W&B",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
             "console": "integratedTerminal",
@@ -224,7 +223,7 @@
         },
         {
             "name": "Train Chair Stage 1 W&B",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
             "console": "integratedTerminal",
@@ -267,7 +266,7 @@
         },
         {
             "name": "Load Train Chair W&B",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
             "console": "integratedTerminal",
@@ -295,80 +294,6 @@
             ]
             
         },
-        {
-            "name": "Instant NGP - Train Chair",
-            "type": "python",
-            "request": "launch",
-            "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "env": {
-                "CUDA_VISIBLE_DEVICES": "1"
-            },
-            "args": [
-                "instant-ngp-bounded",
-                "--output-dir",
-                "outputs/chair/instant-ngp",
-                "--machine.seed",
-                "10",
-                "--logging.local-writer.max-log-size",
-                "0",
-                "instant-ngp-data",
-                "--data",
-                "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/transforms_train.json",
-            ]
-            
-        },
-        {
-            "name": "NerFacto - Train Chair",
-            "type": "python",
-            "request": "launch",
-            "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "env": {
-                "CUDA_VISIBLE_DEVICES": "1"
-            },
-            "args": [
-                "nerfacto",
-                "--output-dir",
-                "outputs/chair/nerfacto",
-                "--machine.seed",
-                "10",
-                "--logging.local-writer.max-log-size",
-                "0",
-                // "instant-ngp-data",
-                "--data",
-                // "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/transforms_train.json",
-                "~/datasets/nerf_kiri_poses/bella_pose/",
-            ]
-            
-        },
-        {
-            "name": "Export Marching Cube Chair",
-            "type": "python",
-            "request": "launch",
-            "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/exporter.py",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "env": {
-                "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
-                // "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
-                "TORCH_EXTENSIONS_DIR": "temp/torch_extensions",
-                "CUDA_VISIBLE_DEVICES": "1"
-            },
-            "args": [
-                "poisson",
-                "--load-config",
-                "outputs/chair/nerf2mesh/chair/nerf2mesh/2023-12-30_135617/config.yml",
-                "--output-dir",
-                "outputs/chair/nerf2mesh/chair/nerf2mesh/2023-12-30_135617/mc_mesh",
-                "--bounding-box-min",
-                "-0.5", "-0.5", "-0.5",
-                "--bounding-box-max",
-                "0.5", "0.5", "0.5",
-            ]
-            
-        },
+        
     ]
 }
