@@ -73,7 +73,7 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     hidden_dim_color: int = 64
     num_levels_sigma_encoder: int = 16
     num_levels_color_encoder: int = 16
-    n_features_per_level_sigma_encoder: int = 2
+    n_features_per_level_sigma_encoder: int = 1
     n_features_per_level_color_encoder: int = 2
     base_resolution: int = 16  # starting resolution
     desired_resolution: int = 2048  # ending resolution
@@ -105,14 +105,13 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     clean_min_d: int = 5
     visibility_mask_dilation: int = 5
     sdf: bool = False
-    mvps: torch.tensor = None
+    mvps: torch.Tensor = None
     mark_unseen_triangles: bool = False
     contract: bool = False
 
-    #     # NOTE: all default configs are passed to nerf2mesh field
-    #     # NOTE: all dervied are computed in nerf2mesh field
+    # NOTE: all default configs are passed to nerf2mesh field
+    # NOTE: all dervied are computed in nerf2mesh field
 
-    #     # TODO: config for stage 1 if needed
     stage: int = 0
     enable_offset_nerf_grad: bool = False
 
@@ -350,7 +349,7 @@ class Nerf2MeshModel(NGPModel):
         return loss_dict
 
     @torch.no_grad()
-    def export_stage0(self, resolution=None, decimate_target=1e5, S=128):
+    def export_stage0(self, resolution: int =None, decimate_target: int =1e5, S: int =128):
         # only for the inner mesh inside [-1, 1]
         if resolution is None:
             resolution = self.config.grid_resolution
@@ -805,7 +804,7 @@ class Nerf2MeshStage1Model(NGPModel):
         image = self.renderer_rgb.blend_background(image)
         metrics_dict = {}
         metrics_dict["psnr"] = self.psnr(outputs["rgb"], image[..., :3]).item()
-        t: torch.tensor = outputs['rgb'].detach().cpu()
+        t: torch.Tensor = outputs['rgb'].detach().cpu()
         im = image[0].detach().cpu()
         # metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
         return metrics_dict

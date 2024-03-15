@@ -19,7 +19,7 @@ import numpy as np
 import trimesh
 
 
-def scale_img_nhwc(x: torch.tensor, size: Tuple, mag="bilinear", min="bilinear"):
+def scale_img_nhwc(x: torch.Tensor, size: Tuple, mag="bilinear", min="bilinear"):
     assert (x.shape[1] >= size[0] and x.shape[2] >= size[1]) or (
         x.shape[1] < size[0] and x.shape[2] < size[1]
     ), "Trying to magnify image in one dimension and minify in the other"
@@ -198,7 +198,7 @@ class Nerf2MeshFieldStage1(Field):
         prev_field: Nerf2MeshField,
         grid_levels: int,
         mesh_path: str,
-        train_mvps: torch.tensor,
+        train_mvps: torch.Tensor,
         super_sample: int = 2,
         pos_gradient_boost: int = 1,
         enable_offset_nerf_grad: bool = False,
