@@ -1,5 +1,6 @@
 from typing import Dict, Optional, Tuple, Type
 from enum import Enum
+import os
 
 from nerfstudio.cameras.rays import RaySamples
 from nerfstudio.fields.base_field import Field, get_normalized_directions
@@ -71,7 +72,6 @@ class Nerf2MeshField(Field):
     ) -> None:
         # super().__init__(aabb = aabb, base_res=base_res, max_res=max_res, log2_hashmap_size = log2_hashmap_size, **kwargs)
         super().__init__()
-        self.register_buffer("aabb", aabb)
         self.register_buffer("max_res", torch.tensor(max_res))
 
         self.encoder = HashEncoding(
@@ -180,8 +180,8 @@ class Nerf2MeshField(Field):
         if shading == Shading.diffuse:
             color = diffuse
         else:
-            directions = get_normalized_directions(ray_samples.frustums.directions)
-            specular_feat = self._get_specular_color(directions, diffuse_feat)
+            # directions = get_normalized_directions(ray_samples.frustums.directions)
+            specular_feat = self._get_specular_color(ray_samples.frustums.directions, diffuse_feat)
             if shading == Shading.specular:
                 color = specular_feat
             else:
@@ -217,7 +217,7 @@ class Nerf2MeshFieldStage1(Field):
 
         vertices = []
         triangles = []
-        v_cum_sum = [0]
+        v_cumsum = [0]
         f_cumsum = [0]
 
         # TODO: this will change - we now use a fixed coarse mesh path
@@ -226,23 +226,24 @@ class Nerf2MeshFieldStage1(Field):
         # assumming one grid level
         for cas in range(self.grid_levels):
             mesh = trimesh.load(
-                self.mesh_path,
+                os.path.join(self.mesh_path, f"mesh_{cas}.ply"),
                 force="mesh",
                 process=False,
                 skip_materials=True,
             )
             vertices.append(mesh.vertices)
-            triangles.append(mesh.faces + v_cum_sum[-1])
-            v_cum_sum.append(v_cum_sum[-1] + len(mesh.vertices))
+            triangles.append(mesh.faces + v_cumsum[-1])
+            v_cumsum.append(v_cumsum[-1] + len(mesh.vertices))
             f_cumsum.append(f_cumsum[-1] + len(mesh.faces))
 
         vertices = np.concatenate(vertices, axis=0)# * 0.3333
         triangles = np.concatenate(triangles, axis=0)
-        self.v_cum_sum = np.array(v_cum_sum)
+        self.v_cumsum = np.array(v_cumsum)
         self.f_cumsum = np.array(f_cumsum)
 
         self.vertices = torch.from_numpy(vertices).float().to(self.device)
         self.triangles = torch.from_numpy(triangles).int().to(self.device)
+
 
         # these will be trained
         self.vertices_offsets = torch.nn.Parameter(
