@@ -12,7 +12,8 @@ dependencies = [
     "PyMCubes",
     "trimesh",
     "nvdiffrast@git+https://github.com/NVlabs/nvdiffrast/",
-    "torch_scatter"
+    "torch_scatter",
+    "pytorch3d@git+https://github.com/facebookresearch/pytorch3d.git@stable"
 ]
 
 [tool.setuptools.packages.find]

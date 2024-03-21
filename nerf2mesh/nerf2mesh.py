@@ -22,6 +22,8 @@ from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.models.instant_ngp import NGPModel, InstantNGPModelConfig
 from nerfstudio.model_components.ray_samplers import VolumetricSampler
 
+from pytorch3d.structures import Meshes
+from pytorch3d.loss import mesh_laplacian_smoothing, mesh_normal_consistency, mesh_edge_loss
 from nerfstudio.model_components.renderers import (
     RGBRenderer,
     AccumulationRenderer,
@@ -113,14 +115,15 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     # NOTE: all default configs are passed to nerf2mesh field
     # NOTE: all dervied are computed in nerf2mesh field
 
+    ##STAGE 1
     stage: int = 0
     enable_offset_nerf_grad: bool = False
-
+    lambda_normal: float = 0.001
+    lambda_edgelen: float = 0.1
     lambda_lap: float = 0.001
     lambda_offsets: float = 0.1
     fine_mesh_path: str = "meshes/stage_1"
     texture_size: float = 4096
-
 
 class Nerf2MeshModel(NGPModel):
     config: Nerf2MeshModelConfig
@@ -636,18 +639,11 @@ class Nerf2MeshModel(NGPModel):
 @dataclass
 class Nerf2MeshStage1ModelConfig(Nerf2MeshModelConfig):
     _target: Type = field(default_factory=lambda: Nerf2MeshStage1Model)
-    stage: int = 0
-    enable_offset_nerf_grad: bool = False
     stage: int = 1
-    lambda_lap: float = 0.001
-    lambda_offsets: float = 0.1
-    fine_mesh_path: str = "meshes/stage_1"
-    texture_size: float = 4096
+    
 
 class Nerf2MeshStage1Model(NGPModel):
     config: Nerf2MeshStage1ModelConfig
-    # field: Nerf2MeshFieldStage1
-    # prev_field: Nerf2MeshField
 
     def populate_modules(self):
         self.all_mvps = None
@@ -775,6 +771,22 @@ class Nerf2MeshStage1Model(NGPModel):
                 self.field.triangles,
             )
             loss = loss + self.config.lambda_lap * loss_lap
+        
+        _mesh = None
+
+        if self.config.lambda_normal > 0:
+                if _mesh is None:
+                    _mesh = Meshes(verts=[self.field.vertices + self.field.vertices_offsets], faces=[self.field.triangles])
+                loss_normal = mesh_normal_consistency(_mesh)
+                loss = loss + self.config.lambda_normal * loss_normal
+            
+        if self.config.lambda_edgelen > 0:
+            if _mesh is None:
+                _mesh = Meshes(verts=[self.field.vertices + self.field.vertices_offsets], faces=[self.field.triangles])
+            loss_edge = mesh_edge_loss(_mesh)
+            loss = loss + self.config.lambda_edgelen * loss_edge
+
+
         if self.config.lambda_offsets > 0:
             if self.bound > 1:
                 abs_offsets_inner = self.field.vertices_offsets[

@@ -31,7 +31,6 @@
                 "--output_dir",
                 "outputs/chair+mesh/nerf2mesh_mark_unseen"
             ]
-            
         },
         {
             "name": "Script Chair Stage 1",
@@ -47,13 +46,32 @@
             },
             "args": [
                 "--data",
-                "~/datasets/nerf_synthetic_small/nerf_synthetic/lego/",
+                "~/datasets/nerf_synthetic/ficus/",
                 "--output_dir",
-                "outputs/lego/nerf2mesh_mark_unseen"
+                "outputs/"
             ]
         },
         {
-            "name": "End to End Chair",
+            "name": "End to End",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "end_to_end_train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
+                "TORCH_EXTENSIONS_DIR" : "temp/torch_extensions",
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "args": [
+                "--data",
+                "~/datasets/nerf_synthetic/${input:nerf_syn_scene}",
+                "--output_dir",
+                "outputs/"
+            ]
+        },
+        {
+            "name": "End to End Unbounded",
             "type": "debugpy",
             "request": "launch",
             "program": "end_to_end_train.py",
@@ -62,13 +80,72 @@
             "env": {
                 "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
                 "TORCH_EXTENSIONS_DIR": "temp/torch_extensions",
-                "CUDA_VISIBLE_DEVICES": "0"
+                "CUDA_VISIBLE_DEVICES": "1"
             },
             "args": [
                 "--data",
-                "~/datasets/nerf_synthetic/chair/",
+                "~/datasets/lucy_pose",
                 "--output_dir",
-                "outputs/"
+                "outputs/",
+                "--bound",
+                "0.75",
+                "--scale",
+                "0.333"
+            ]
+        },
+        {
+            "name": "Train Bella",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
+                // "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
+                "TORCH_EXTENSIONS_DIR": "temp/torch_extensions",
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
+            "args": [
+                "nerf2mesh",
+                "--pipeline.datamanager.data",
+                "~/datasets/bella_pose/",
+                "--max_num_iterations=5000",
+                "--output-dir",
+                "outputs/",
+                "--machine.seed",
+                "10",
+                // "--logging.local-writer.max-log-size=0",
+                "--pipeline.model.bound",
+                "2",
+                "--pipeline.model.coarse-mesh-path",
+                "outputs/bella_pose/nerf2mesh/meshes/mesh_0.ply",
+                "--pipeline.model.mark-unseen-triangles",
+                "True",
+            ]
+        },
+        {
+            "name": "Train Instant ngp",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "venv/lib/python3.10/site-packages/nerfstudio/scripts/train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "NERFSTUDIO_METHOD_CONFIGS": "nerf2mesh=nerf2mesh.config:nerf2mesh",
+                // "NERFSTUDIO_DATAPARSER_CONFIGS": "nerf2mesh=nerf2mesh.config:Nerf2MeshDataParserConfig",
+                "TORCH_EXTENSIONS_DIR": "temp/torch_extensions",
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
+            "args": [
+                "instant-ngp-bounded",
+                "--pipeline.datamanager.data",
+                "~/datasets/bella_pose/",
+                "--max_num_iterations=5000",
+                "--output-dir",
+                "outputs/",
+                "--machine.seed",
+                "10",
             ]
         },
         {
@@ -90,19 +167,18 @@
                 "~/datasets/nerf_synthetic/chair/",
                 "--max_num_iterations=10000",
                 "--output-dir",
-                "outputs/chair+mesh/nerf2mesh",
+                "outputs/",
                 "--machine.seed",
                 "10",
-                "--logging.local-writer.max-log-size=0",
+                // "--logging.local-writer.max-log-size=0",
                 "--pipeline.model.coarse-mesh-path",
                 "outputs/chair+mesh/nerf2mesh/meshes/mesh_0.ply",
                 "--pipeline.model.mark-unseen-triangles",
-                "False", 
+                "True",
                 "--project_name=nerf2mesh_nerfstudio",
                 "--experiment_name=chair",
                 "--vis=viewer",
             ]
-            
         },
         {
             "name": "Train Chair Stage 1",
@@ -136,14 +212,13 @@
                 "--pipeline.model.fine-mesh-path",
                 "outputs/chair+mesh/nerf2mesh/meshes/stage_1/",
                 "--pipeline.model.mark-unseen-triangles",
-                "False", 
+                "False",
                 "--project_name=nerf2mesh_nerfstudio",
                 "--experiment_name=chair",
                 "--vis=viewer",
                 "--data",
                 "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/",
             ]
-            
         },
         {
             "name": "Chair Stage 1 - From n2m",
@@ -175,16 +250,14 @@
                 "--pipeline.model.fine-mesh-path",
                 "outputs/chair+mesh/nerf2mesh/meshes_from_n2m/",
                 "--pipeline.model.mark-unseen-triangles",
-                "False", 
+                "False",
                 "--project_name=nerf2mesh_nerfstudio",
                 "--experiment_name=chair",
                 "--vis=viewer",
                 "--data",
                 "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/",
             ]
-            
         },
-        
         {
             "name": "Train Chair W&B",
             "type": "debugpy",
@@ -214,12 +287,11 @@
                 "--pipeline.model.coarse-mesh-path",
                 "outputs/chair+mesh/nerf2mesh/meshes/mesh_0.ply",
                 "--pipeline.model.mark-unseen-triangles",
-                "False", 
+                "False",
                 "--project_name=nerf2mesh_nerfstudio",
                 "--experiment_name=chair+concat+mesh",
                 "--vis=viewer+wandb",
             ]
-            
         },
         {
             "name": "Train Chair Stage 1 W&B",
@@ -256,13 +328,11 @@
                 "--pipeline.model.fine-mesh-path",
                 "outputs/chair+mesh/nerf2mesh/meshes/stage_1/mesh_0.ply",
                 "--pipeline.model.mark-unseen-triangles",
-                "False", 
+                "False",
                 "--project_name=nerf2mesh_nerfstudio",
                 "--experiment_name=chair_stage1",
                 // "--vis=viewer+wandb",
-
             ]
-            
         },
         {
             "name": "Load Train Chair W&B",
@@ -292,8 +362,23 @@
                 "--data",
                 "~/datasets/nerf_synthetic_small/nerf_synthetic/chair/",
             ]
-            
         },
-        
+    ],
+    "inputs": [
+        {
+            "id": "nerf_syn_scene",
+            "type": "pickString",
+            "description": "Select a scene",
+            "options": [
+                "chair",
+                "drums",
+                "ficus",
+                "hotdog",
+                "lego",
+                "materials",
+                "mic",
+                "ship"
+            ]
+        }
     ]
 }
