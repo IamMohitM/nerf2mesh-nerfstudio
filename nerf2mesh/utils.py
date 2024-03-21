@@ -2,6 +2,7 @@ from enum import Enum
 import pymeshlab as pml
 import numpy as np
 import torch
+import torch_scatter as TORCH_SCATTER
 
 class Shading(Enum):
     diffuse = 1
@@ -298,3 +299,25 @@ def clean_mesh(verts, faces, v_pct=1, min_f=8, min_d=5, repair=True, remesh=True
     print(f'[INFO] mesh cleaning: {_ori_vert_shape} --> {verts.shape}, {_ori_face_shape} --> {faces.shape}')
 
     return verts, faces
+
+
+@torch.no_grad()
+def update_triangles_errors(triangles_errors_id, triangles_errors, triangles_errors_cnt, loss):
+    # loss: [H, W], detached!
+
+    # always call after render_stage1, so self.triangles_errors_id is not None.
+    indices = triangles_errors_id.view(-1).long()
+    mask = indices >= 0
+
+    indices = indices[mask].contiguous()
+    values = loss.view(-1)[mask].contiguous()
+
+    
+
+    TORCH_SCATTER.scatter_add(values, indices, out=triangles_errors)
+    TORCH_SCATTER.scatter_add(
+        torch.ones_like(values), indices, out=triangles_errors_cnt
+    )
+
+    triangles_errors_id = None
+    return triangles_errors_id
