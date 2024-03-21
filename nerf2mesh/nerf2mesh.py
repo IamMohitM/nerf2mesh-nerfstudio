@@ -392,7 +392,24 @@ class Nerf2MeshModel(NGPModel):
                             zi * S : zi * S + len(zs),
                         ] = val.reshape(len(xs), len(ys), len(zs))
 
-
+        mask = torch.zeros(
+                    [self.config.grid_resolution] * 3,
+                    dtype=torch.float32,
+                    device=self.device,
+                )
+        mask = self.occupancy_grid.occs[:self.occupancy_grid.cells_per_lvl].view_as(mask)
+        mask = (
+            F.interpolate(
+                mask.unsqueeze(0).unsqueeze(0),
+                size=[resolution] * 3,
+                mode="nearest",
+            )
+            .squeeze(0)
+            .squeeze(0)
+        )
+        mask = mask > density_thresh
+        sigmas = sigmas * mask
+        
         sigmas = torch.nan_to_num(sigmas, 0)
         sigmas = sigmas.cpu().numpy()
 
