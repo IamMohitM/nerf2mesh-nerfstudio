@@ -8,10 +8,11 @@ dependencies = [
     "torch",
     "torchvision",
     "tinycudann@git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch",
-    "pymeshlab",
+    "pymeshlab==2022.2.post4",
     "PyMCubes",
     "trimesh",
     "nvdiffrast@git+https://github.com/NVlabs/nvdiffrast/",
+    "torch_scatter"
 ]
 
 [tool.setuptools.packages.find]
