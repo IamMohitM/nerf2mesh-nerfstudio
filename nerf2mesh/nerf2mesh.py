@@ -15,7 +15,9 @@ from torch.nn import Parameter
 from torchmetrics.functional import structural_similarity_index_measure
 from torchmetrics.image import PeakSignalNoiseRatio
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+import math
 
+from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.models.instant_ngp import NGPModel, InstantNGPModelConfig
 from nerfstudio.model_components.ray_samplers import VolumetricSampler
@@ -58,7 +60,7 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     _target: Type = field(default_factory=lambda: Nerf2MeshModel)
 
     # occupancy grid
-    grid_levels: int = 1
+    # grid_levels: int = 1
     density_thresh: float = 10
     alpha_thre: float = 0.0
     """Threshold for opacity skipping."""
@@ -66,7 +68,7 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     """Should be set to 0.0 for blender scenes but 1./256 for real scenes."""
     render_step_size: Optional[float] = None
     """Minimum step size for rendering."""
-
+    bound: float = 1
     # near_plane: float=0.01
 
     hidden_dim_sigma: int = 32
@@ -104,7 +106,6 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     clean_min_f: int = 8
     clean_min_d: int = 5
     visibility_mask_dilation: int = 5
-    sdf: bool = False
     mvps: torch.Tensor = None
     mark_unseen_triangles: bool = False
     contract: bool = False
@@ -124,7 +125,6 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
 class Nerf2MeshModel(NGPModel):
     config: Nerf2MeshModelConfig
     field: Nerf2MeshField
-    field_2: Nerf2MeshFieldStage1
 
     def populate_modules(self):
         self.all_mvps = None
@@ -136,11 +136,14 @@ class Nerf2MeshModel(NGPModel):
         self.cx = None
         self.cy = None
         # super().populate_modules()
-        self.scene_aabb = torch.nn.Parameter(
-            self.scene_box.aabb.flatten(), requires_grad=False
+        scene_box = SceneBox(aabb=torch.tensor([ [-self.config.bound] * 3,[self.config.bound] * 3], dtype=torch.float32))
+        
+        
+        self.scene_aabb  = torch.nn.Parameter(
+            scene_box.aabb.flatten(), requires_grad=False
         )
-
-        self.register_buffer("bound", self.scene_box.aabb.max())
+        self.bound = self.config.bound
+        # self.register_buffer("bound", self.config.bound)
 
         self.field = Nerf2MeshField(
             aabb=self.scene_box.aabb,
@@ -175,10 +178,12 @@ class Nerf2MeshModel(NGPModel):
         self.ssim = structural_similarity_index_measure
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
 
+        self.grid_levels = 1 + math.ceil(math.log2(self.bound))
+
         self.occupancy_grid = nerfacc.OccGridEstimator(
             roi_aabb=self.scene_aabb,
             resolution=self.config.grid_resolution,
-            levels=self.config.grid_levels,
+            levels=self.grid_levels,
         )
         self.sampler = VolumetricSampler(
             occupancy_grid=self.occupancy_grid, density_fn=self.field.density_fn
@@ -363,7 +368,7 @@ class Nerf2MeshModel(NGPModel):
         sigmas = torch.zeros([resolution] * 3, dtype=torch.float32, device=self.device)
 
         if resolution == self.config.grid_resolution:
-            sigmas = self.occupancy_grid.occs.view_as(sigmas)
+            sigmas = self.occupancy_grid.occs[:self.occupancy_grid.cells_per_lvl].view_as(sigmas)
         else:
             # query
 
@@ -387,33 +392,11 @@ class Nerf2MeshModel(NGPModel):
                             zi * S : zi * S + len(zs),
                         ] = val.reshape(len(xs), len(ys), len(zs))
 
-            # use the density_grid as a baseline mask (also excluding untrained regions)
-            if not self.config.sdf:
-                mask = torch.zeros(
-                    [self.config.grid_resolution] * 3,
-                    dtype=torch.float32,
-                    device=self.device,
-                )
-                mask = self.occupancy_grid.occs.view_as(mask)
-                mask = (
-                    F.interpolate(
-                        mask.unsqueeze(0).unsqueeze(0),
-                        size=[resolution] * 3,
-                        mode="nearest",
-                    )
-                    .squeeze(0)
-                    .squeeze(0)
-                )
-                mask = mask > density_thresh
-                sigmas = sigmas * mask
 
         sigmas = torch.nan_to_num(sigmas, 0)
         sigmas = sigmas.cpu().numpy()
 
-        if self.config.sdf:
-            vertices, triangles = mcubes.marching_cubes(-sigmas, 0)
-        else:
-            vertices, triangles = mcubes.marching_cubes(sigmas, density_thresh)
+        vertices, triangles = mcubes.marching_cubes(sigmas, density_thresh)
 
         vertices = vertices / (resolution - 1) * 2 - 1
         vertices = vertices.astype(np.float32)
@@ -471,7 +454,7 @@ class Nerf2MeshModel(NGPModel):
             )
 
             # for each cas >= 1
-            for cas in range(1, self.cascade):
+            for cas in range(1, self.grid_levels):
                 bound = min(2**cas, self.bound)
                 half_grid_size = bound / target_reso
 
@@ -479,7 +462,9 @@ class Nerf2MeshModel(NGPModel):
                 occ = torch.zeros(
                     [reso] * 3, dtype=torch.float32, device=self.device
                 )
-                occ[all_indices] = self.occupancy_grid[cas]
+                start_index = cas * self.occupancy_grid.cells_per_lvl
+                end_index = (cas+1) * self.occupancy_grid.cells_per_lvl
+                occ = self.occupancy_grid.occs[start_index:end_index].view_as(occ)
 
             # remove the center (before mcubes)
                 # occ[reso // 4 : reso * 3 // 4, reso // 4 : r  eso * 3 // 4, reso // 4 : reso * 3 // 4] = 0
@@ -517,7 +502,7 @@ class Nerf2MeshModel(NGPModel):
 
                 # remove the out-of-AABB region
                 xmn, ymn, zmn, xmx, ymx, zmx = (
-                    self.aabb_train.cpu().numpy().tolist()
+                    self.scene_aabb.cpu().numpy().tolist()
                 )
                 xmn += half_grid_size
                 ymn += half_grid_size
@@ -560,30 +545,30 @@ class Nerf2MeshModel(NGPModel):
                     f"[INFO] exporting outer mesh at cas {cas}, v = {vertices_out.shape}, f = {triangles_out.shape}"
                 )
 
-                if self.all_mvps is not None:
-                    visibility_mask = (
-                        self.mark_unseen_triangles(
-                            vertices_out,
-                            triangles_out,
-                            self.all_mvps,
-                            self.image_height,
-                            self.image_width,
-                        )
-                        .cpu()
-                        .numpy()
-                    )
-                    vertices_out, triangles_out = remove_masked_trigs(
+            if self.all_mvps is not None:
+                visibility_mask = (
+                    self.mark_unseen_triangles(
                         vertices_out,
                         triangles_out,
-                        visibility_mask,
-                        dilation=self.config.visibility_mask_dilation,
+                        self.all_mvps,
+                        self.image_height,
+                        self.image_width,
                     )
+                    .cpu()
+                    .numpy()
+                )
+                vertices_out, triangles_out = remove_masked_trigs(
+                    vertices_out,
+                    triangles_out,
+                    visibility_mask,
+                    dilation=self.config.visibility_mask_dilation,
+                )
 
                 # vertices_out, triangles_out = clean_mesh(vertices_out, triangles_out, min_f=self.opt.clean_min_f, min_d=self.opt.clean_min_d, repair=False, remesh=False)
                 mesh_out = trimesh.Trimesh(
                     vertices_out, triangles_out, process=False
                 )  # important, process=True leads to seg fault...
-                mesh_out.export(os.path.join(save_path, f"mesh_{cas}.ply"))
+                mesh_out.export(os.path.join(os.path.dirname(self.config.coarse_mesh_path), f"mesh_{cas}.ply"))
 
     @torch.no_grad()
     def mark_unseen_triangles(self, vertices, triangles, mvps, H, W):
@@ -662,6 +647,7 @@ class Nerf2MeshStage1Model(NGPModel):
         )
 
         self.register_buffer("bound", self.scene_box.aabb.max())
+        self.grid_levels = 1 + math.ceil(math.log2(self.bound))
 
         self.prev_field = Nerf2MeshField(
             aabb=self.scene_box.aabb,
@@ -682,8 +668,8 @@ class Nerf2MeshStage1Model(NGPModel):
 
         self.field = Nerf2MeshFieldStage1(
                 prev_field=self.prev_field,
-                grid_levels=self.config.grid_levels,
-                mesh_path=self.config.coarse_mesh_path,
+                grid_levels=self.grid_levels,
+                mesh_path=os.path.dirname(self.config.coarse_mesh_path),
                 train_mvps = self.train_mvp,
                 # eval_mvps = self.eval,
 
@@ -713,7 +699,6 @@ class Nerf2MeshStage1Model(NGPModel):
         callbacks.append(
             TrainingCallback(
                 where_to_run=[TrainingCallbackLocation.AFTER_TRAIN],
-                # update_every_num_iters=1,
                 func=export_fine_mesh,
             )
         )
@@ -740,8 +725,6 @@ class Nerf2MeshStage1Model(NGPModel):
 
         return outputs
     
-    # def get_outputs_for_camera_ray_bundle(self, camera_ray_bundle: RayBundle) -> Dict[str, torch.Tensor]:
-    #     return {}
     
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
         image = batch["image"][..., :3].to(self.device)
@@ -916,7 +899,7 @@ class Nerf2MeshStage1Model(NGPModel):
             mask = mask.view(h, w)
 
             # quantize [0.0, 1.0] to [0, 255]
-            feats = feats.cpu().numpy()
+            feats = feats.detach().cpu().numpy()
             feats = (feats * 255).astype(np.uint8)
 
             ### NN search as a queer antialiasing ...
@@ -952,8 +935,6 @@ class Nerf2MeshStage1Model(NGPModel):
                 feats1 = cv2.resize(feats1, (w0, h0), interpolation=cv2.INTER_LINEAR)
 
             os.makedirs(path, exist_ok=True)
-            # cv2.imwrite(os.path.join(path, f'feat0_{cas}.png'), feats0, [int(cv2.IMWRITE_PNG_COMPRESSION), png_compression_level])
-            # cv2.imwrite(os.path.join(path, f'feat1_{cas}.png'), feats1, [int(cv2.IMWRITE_PNG_COMPRESSION), png_compression_level])
             cv2.imwrite(os.path.join(path, f"feat0_{cas}.jpg"), feats0)
             cv2.imwrite(os.path.join(path, f"feat1_{cas}.jpg"), feats1)
 
@@ -993,18 +974,13 @@ class Nerf2MeshStage1Model(NGPModel):
         v = (self.field.vertices + self.field.vertices_offsets).detach()
         f = self.field.triangles.detach()
 
-        for cas in range(self.config.grid_levels):
-            cur_v = v[self.field.v_cum_sum[cas] : self.field.v_cum_sum[cas + 1]]
+        for cas in range(self.grid_levels):
+            cur_v = v[self.field.v_cumsum[cas] : self.field.v_cumsum[cas + 1]]
             cur_f = (
                 f[self.field.f_cumsum[cas] : self.field.f_cumsum[cas + 1]]
-                - self.field.v_cum_sum[cas]
+                - self.field.v_cumsum[cas]
             )
             _export_obj(cur_v, cur_f, h0, w0, self.field.super_sample, cas)
-
-            # half the texture resolution for remote area.
-            # if not self.opt.sdf and h0 > 2048 and w0 > 2048:
-            #     h0 //= 2
-            #     w0 //= 2
 
         # save mlp as json
         params = dict(self.prev_field.specular_net.named_parameters())
@@ -1016,7 +992,7 @@ class Nerf2MeshStage1Model(NGPModel):
             mlp[k] = p_np.tolist()
 
         mlp["bound"] = self.bound.item()
-        mlp["cascade"] = self.config.grid_levels
+        mlp["cascade"] = self.grid_levels
 
         mlp_file = os.path.join(path, f"mlp.json")
         with open(mlp_file, "w") as fp:

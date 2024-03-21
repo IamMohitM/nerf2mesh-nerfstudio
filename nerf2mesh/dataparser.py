@@ -30,6 +30,7 @@ class Nerf2MeshDataParserConfig(InstantNGPDataParserConfig):
     _target: Type = field(default_factory=lambda: Nerf2MeshDataParser)
     min_near: float = 0.01
     max_far: float = 1000.0
+    bound: float = 1.0
 
 
 @dataclass
@@ -129,7 +130,7 @@ class Nerf2MeshDataParser(InstantNGP):
 
         # in x,y,z order
         # assumes that the scene is centered at the origin
-        aabb_scale = meta.get("aabb_scale", 1)
+        aabb_scale = meta.get("aabb_scale", self.config.bound)
 
         scene_box = SceneBox(
             aabb=torch.tensor(
