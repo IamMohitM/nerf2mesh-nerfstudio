@@ -2,6 +2,27 @@
 # Aim
 This project aims to integrate the [nerf2mesh](https://me.kiui.moe/nerf2mesh/) method suggested by Jiaxiang Tang et al, with NerfStudio. 
 
+# Installation
+
+# Pre-requisite Installation
+1. Torch and Torchvision
+
+```
+pip install torch torchvision
+```
+  
+2. [tinycudann](https://github.com/NVlabs/tiny-cuda-nn)
+
+```
+pip install git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch
+```
+
+3. [pytorch3d](https://github.com/facebookresearch/pytorch3d/blob/main/INSTALL.md)
+
+```
+pip install git+https://github.com/facebookresearch/pytorch3d.git@stable
+```
+
 # Train
 
 ## Using nerfstudio cli
