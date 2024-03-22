@@ -23,6 +23,12 @@ pip install git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/to
 pip install git+https://github.com/facebookresearch/pytorch3d.git@stable
 ```
 
+4. Install Package
+
+```
+pip install -e .
+```
+
 # Train
 
 ## Using nerfstudio cli
