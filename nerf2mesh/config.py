@@ -1,4 +1,5 @@
 from nerfstudio.plugins.types import MethodSpecification #@IgnoreException
+from nerfstudio.plugins.registry_dataparser import DataParserSpecification #@IgnoreException
 # from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.engine.optimizers import AdamOptimizerConfig
 
@@ -45,3 +46,5 @@ nerf2mesh = MethodSpecification(
     ),
     description="nerf2mesh",
 )
+
+Nerf2MeshDataParser = DataParserSpecification(config=Nerf2MeshDataParserConfig())

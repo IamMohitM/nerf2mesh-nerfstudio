@@ -16,6 +16,7 @@ from torchmetrics.functional import structural_similarity_index_measure
 from torchmetrics.image import PeakSignalNoiseRatio
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 import math
+import torch_scatter as TORCH_SCATTER
 
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.cameras.rays import RayBundle
@@ -23,12 +24,13 @@ from nerfstudio.models.instant_ngp import NGPModel, InstantNGPModelConfig
 from nerfstudio.model_components.ray_samplers import VolumetricSampler
 
 from pytorch3d.structures import Meshes
-from pytorch3d.loss import mesh_laplacian_smoothing, mesh_normal_consistency, mesh_edge_loss
+from pytorch3d.loss import mesh_normal_consistency, mesh_edge_loss
 from nerfstudio.model_components.renderers import (
     RGBRenderer,
     AccumulationRenderer,
     DepthRenderer,
 )
+from nerfstudio.utils.rich_utils import CONSOLE
 from nerfstudio.engine.callbacks import (
     TrainingCallback,
     TrainingCallbackAttributes,
@@ -47,6 +49,7 @@ from nerf2mesh.utils import (
     decimate_mesh,
     laplacian_smooth_loss,
     contract,
+    decimate_and_refine_mesh
 )
 from nerf2mesh.sampler import MetaDataUniformSampler
 
@@ -105,9 +108,9 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     coarse_mesh_path: str = "meshes/mesh_0.ply"
     env_reso: int = 256
     fp16: bool = True
-    clean_min_f: int = 8
-    clean_min_d: int = 5
-    visibility_mask_dilation: int = 5
+    clean_min_f: int = 16
+    clean_min_d: int = 10
+    visibility_mask_dilation: int = 50
     mvps: torch.Tensor = None
     mark_unseen_triangles: bool = False
     contract: bool = False
@@ -115,7 +118,7 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     # NOTE: all default configs are passed to nerf2mesh field
     # NOTE: all dervied are computed in nerf2mesh field
 
-    ##STAGE 1
+    # STAGE 1
     stage: int = 0
     enable_offset_nerf_grad: bool = False
     lambda_normal: float = 0.001
@@ -124,6 +127,12 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     lambda_offsets: float = 0.1
     fine_mesh_path: str = "meshes/stage_1"
     texture_size: float = 4096
+    # stage 1 fine mesh refine parameters
+    refine: bool = True
+    refine_steps: int = 1000
+    refine_remesh_size: float = 0.01
+    refine_decimate_ratio: float = 0.1
+    refine_size: float  = 0.01
 
 class Nerf2MeshModel(NGPModel):
     config: Nerf2MeshModelConfig
@@ -715,6 +724,19 @@ class Nerf2MeshStage1Model(NGPModel):
                 func=export_fine_mesh,
             )
         )
+
+        if self.config.refine:
+            def refine_mesh(step: int):
+                self.refine_and_decimate()
+
+            callbacks.append(
+                TrainingCallback(
+                    where_to_run=[TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
+                    func=refine_mesh,
+                    update_every_num_iters=self.config.refine_steps
+                )
+            )
+
         return callbacks
     
      # same as ngp model
@@ -806,6 +828,9 @@ class Nerf2MeshStage1Model(NGPModel):
                 )
 
             loss = loss + self.config.lambda_offsets * loss_offsets
+
+        if self.config.refine:
+            self.update_triangles_errors(loss.detach())
 
         loss_dict = {"rgb_loss": loss.mean()}
 
@@ -1027,3 +1052,127 @@ class Nerf2MeshStage1Model(NGPModel):
         with open(mlp_file, "w") as fp:
             json.dump(mlp, fp, indent=2)
 
+    @torch.no_grad()
+    def refine_and_decimate(self):
+        device = self.field.vertices.device
+
+        v = (self.field.vertices + self.field.vertices_offsets).detach().cpu().numpy()
+        f = self.field.triangles.detach().cpu().numpy()
+
+        errors = self.field.triangle_errors.cpu().numpy()
+
+        cnt = self.field.triangle_errors_cnt.cpu().numpy()
+        cnt_mask = cnt > 0
+        errors[cnt_mask] = errors[cnt_mask] / cnt[cnt_mask]
+
+        # only care about the inner mesh
+        errors = errors[: self.field.f_cumsum[1]]
+        cnt_mask = cnt_mask[: self.field.f_cumsum[1]]
+
+        # find a threshold to decide whether we perform subdivision / decimation.
+        thresh_refine = np.percentile(errors[cnt_mask], 90)
+        thresh_decimate = np.percentile(errors[cnt_mask], 50)
+
+        mask = np.zeros_like(errors)
+        mask[(errors > thresh_refine) & cnt_mask] = 2
+        mask[(errors < thresh_decimate) & cnt_mask] = 1
+
+        print(
+            f"[INFO] faces to decimate {(mask == 1).sum()}, faces to refine {(mask == 2).sum()}"
+        )
+
+        if self.bound <= 1:
+            # mesh = trimesh.Trimesh(v, f, process=False)
+            # mesh.export(os.path.join(self.opt.workspace, 'mesh_stage0', 'mesh_0_before_updated.ply'))
+
+            v, f = decimate_and_refine_mesh(
+                v,
+                f,
+                mask,
+                decimate_ratio=self.config.refine_decimate_ratio,
+                refine_size=self.config.refine_size,
+                refine_remesh_size=self.config.refine_remesh_size,
+            )
+            # export
+            mesh = trimesh.Trimesh(v, f, process=False)
+            mesh.export(
+                os.path.join(self.config.fine_mesh_path, "mesh_0_updated.ply")
+            )
+            v, f = mesh.vertices, mesh.faces
+
+            # fix counters
+            self.field.v_cumsum[1:] += v.shape[0] - self.field.v_cumsum[1]
+            self.field.f_cumsum[1:] += f.shape[0] - self.field.f_cumsum[1]
+        else:
+            vertices = []
+            triangles = []
+            v_cumsum = [0]
+            f_cumsum = [0]
+            
+            for cas in range(self.grid_levels):
+                cur_v = v[self.field.v_cumsum[cas] : self.field.v_cumsum[cas + 1]]
+                cur_f = (
+                    f[self.field.f_cumsum[cas] : self.field.f_cumsum[cas + 1]] - self.field.v_cumsum[cas]
+                )
+
+                if cas == 0:
+                    cur_v, cur_f = decimate_and_refine_mesh(
+                        cur_v,
+                        cur_f,
+                        mask,
+                        decimate_ratio=self.config.refine_decimate_ratio,
+                        refine_size=self.config.refine_size,
+                        refine_remesh_size=self.config.refine_remesh_size,
+                    )
+
+                mesh = trimesh.Trimesh(cur_v, cur_f, process=False)
+                mesh.export(
+                    os.path.join(
+                        self.config.fine_mesh_path, f"mesh_{cas}_updated.ply"
+                    )
+                )
+
+                vertices.append(mesh.vertices)
+                triangles.append(mesh.faces + v_cumsum[-1])
+
+                v_cumsum.append(v_cumsum[-1] + mesh.vertices.shape[0])
+                f_cumsum.append(f_cumsum[-1] + mesh.faces.shape[0])
+
+            v = np.concatenate(vertices, axis=0)
+            f = np.concatenate(triangles, axis=0)
+            self.field.v_cumsum = np.array(v_cumsum)
+            self.field.f_cumsum = np.array(f_cumsum)
+
+        self.field.vertices = torch.from_numpy(v).float().contiguous().to(device)  # [N, 3]
+        self.field.triangles = torch.from_numpy(f).int().contiguous().to(device)
+        self.field.vertices_offsets = torch.nn.Parameter(torch.zeros_like(self.field.vertices))
+
+        self.field.triangle_errors = torch.zeros_like(
+            self.field.triangles[:, 0], dtype=torch.float32
+        )
+        self.field.triangle_errors_cnt = torch.zeros_like(
+            self.field.triangles[:, 0], dtype=torch.float32
+        )
+
+        CONSOLE.print(
+            f"[INFO] update stage1 mesh: {self.field.vertices.shape}, {self.field.triangles.shape}"
+        )
+
+    @torch.no_grad()
+    def update_triangles_errors(self, loss):
+        # loss: [H, W], detached!
+
+        # always call after render_stage1, so self.triangles_errors_id is not None.
+        indices = self.field.triangles_errors_id.view(-1).long()
+        mask = indices >= 0
+
+        indices = indices[mask].contiguous()
+        values = loss.view(-1)[mask].contiguous()
+
+        TORCH_SCATTER.scatter_add(values, indices, out=self.field.triangle_errors)
+        TORCH_SCATTER.scatter_add(
+            torch.ones_like(values), indices, out=self.field.triangle_errors_cnt
+        )
+
+        self.field.triangles_errors_id = None
+        

@@ -301,23 +301,65 @@ def clean_mesh(verts, faces, v_pct=1, min_f=8, min_d=5, repair=True, remesh=True
     return verts, faces
 
 
-@torch.no_grad()
-def update_triangles_errors(triangles_errors_id, triangles_errors, triangles_errors_cnt, loss):
-    # loss: [H, W], detached!
+# @torch.no_grad()
+# def update_triangles_errors(triangles_errors_id, triangles_errors, triangles_errors_cnt, loss):
+#     # loss: [H, W], detached!
 
-    # always call after render_stage1, so self.triangles_errors_id is not None.
-    indices = triangles_errors_id.view(-1).long()
-    mask = indices >= 0
+#     # always call after render_stage1, so self.triangles_errors_id is not None.
+#     indices = triangles_errors_id.view(-1).long()
+#     mask = indices >= 0
 
-    indices = indices[mask].contiguous()
-    values = loss.view(-1)[mask].contiguous()
+#     indices = indices[mask].contiguous()
+#     values = loss.view(-1)[mask].contiguous()
 
     
 
-    TORCH_SCATTER.scatter_add(values, indices, out=triangles_errors)
-    TORCH_SCATTER.scatter_add(
-        torch.ones_like(values), indices, out=triangles_errors_cnt
-    )
+#     TORCH_SCATTER.scatter_add(values, indices, out=triangles_errors)
+#     TORCH_SCATTER.scatter_add(
+#         torch.ones_like(values), indices, out=triangles_errors_cnt
+#     )
 
-    triangles_errors_id = None
-    return triangles_errors_id
+#     triangles_errors_id = None
+#     return triangles_errors_id
+
+
+def decimate_and_refine_mesh(verts, faces, mask, decimate_ratio=0.1, refine_size=0.01, refine_remesh_size=0.02):
+    # verts: [N, 3]
+    # faces: [M, 3]
+    # mask: [M], 0 denotes do nothing, 1 denotes decimation, 2 denotes subdivision
+
+    _ori_vert_shape = verts.shape
+    _ori_face_shape = faces.shape
+
+    m = pml.Mesh(verts, faces, f_scalar_array=mask)
+    ms = pml.MeshSet()
+    ms.add_mesh(m, 'mesh') # will copy!
+
+    # decimate and remesh
+    ms.compute_selection_by_condition_per_face(condselect='fq == 1')
+    if decimate_ratio > 0:
+        ms.meshing_decimation_quadric_edge_collapse(targetfacenum=int((1 - decimate_ratio) * (mask == 1).sum()), selected=True)
+
+    if refine_remesh_size > 0:
+        ms.meshing_isotropic_explicit_remeshing(iterations=3, targetlen=pml.AbsoluteValue(refine_remesh_size), selectedonly=True)
+
+    # repair
+    ms.set_selection_none(allfaces=True)
+    ms.meshing_repair_non_manifold_edges(method=0)
+    ms.meshing_repair_non_manifold_vertices(vertdispratio=0)
+    
+    # refine 
+    if refine_size > 0:
+        ms.compute_selection_by_condition_per_face(condselect='fq == 2')
+        ms.meshing_surface_subdivision_midpoint(threshold=pml.AbsoluteValue(refine_size), selected=True)
+
+        # ms.meshing_isotropic_explicit_remeshing(iterations=3, targetlen=pml.AbsoluteValue(refine_size), selectedonly=True)
+
+    # extract mesh
+    m = ms.current_mesh()
+    verts = m.vertex_matrix()
+    faces = m.face_matrix()
+
+    print(f'[INFO] mesh decimating & subdividing: {_ori_vert_shape} --> {verts.shape}, {_ori_face_shape} --> {faces.shape}')
+
+    return verts, faces
