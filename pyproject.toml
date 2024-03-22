@@ -3,11 +3,12 @@ name = "nerf2mesh"
 description = "Nerf2Mesh implementation for NeRFStudio"
 version = "0.1.0"
 
+#pre-requisite - tinycudann and torch
 dependencies = [
     "nerfstudio",
     "torch",
     "torchvision",
-    "tinycudann@git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch",
+    # "tinycudann@git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch",
     "pymeshlab==2022.2.post4",
     "PyMCubes",
     "trimesh",

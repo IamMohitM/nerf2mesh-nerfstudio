@@ -12,15 +12,15 @@ NERFSTUDIO_METHOD_CONFIGS=nerf2mesh=nerf2mesh.config:nerf2mesh ns-train nerf2mes
 --stage \
 0 \
 --output-dir \
-outputs/chair+mesh/nerf2mesh \
+outputs/ \
 --logging.local-writer.max-log-size=0 \
 --pipeline.model.coarse-mesh-path \
-outputs/chair+mesh/nerf2mesh/meshes/mesh_0.ply \
+outputs/chair/nerf2mesh/meshes/mesh_0.ply \
 meshes/stage_0_n2m/mesh_0.ply \
 --pipeline.model.mark-unseen-triangles \
 True \ 
 --data \
-~/datasets/nerf_synthetic_small/nerf_synthetic/chair/
+~/datasets/nerf_synthetic/chair/
 
 ```
 
