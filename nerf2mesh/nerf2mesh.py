@@ -108,11 +108,11 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     coarse_mesh_path: str = "meshes/mesh_0.ply"
     env_reso: int = 256
     fp16: bool = True
-    clean_min_f: int = 16
-    clean_min_d: int = 10
-    visibility_mask_dilation: int = 50
+    clean_min_f: int = 8
+    clean_min_d: int = 5
+    visibility_mask_dilation: int = 5
     mvps: torch.Tensor = None
-    mark_unseen_triangles: bool = False
+    mark_unseen_triangles: bool = True
     contract: bool = False
 
     # NOTE: all default configs are passed to nerf2mesh field
@@ -121,8 +121,8 @@ class Nerf2MeshModelConfig(InstantNGPModelConfig):
     # STAGE 1
     stage: int = 0
     enable_offset_nerf_grad: bool = False
-    lambda_normal: float = 0.001
-    lambda_edgelen: float = 0.1
+    lambda_normal: float = 0#0.001
+    lambda_edgelen: float = 0#0.1
     lambda_lap: float = 0.001
     lambda_offsets: float = 0.1
     fine_mesh_path: str = "meshes/stage_1"
@@ -726,7 +726,11 @@ class Nerf2MeshStage1Model(NGPModel):
         )
 
         if self.config.refine:
+            self.refine_flag = False
             def refine_mesh(step: int):
+                if not self.refine_flag:
+                    self.refine_flag = True
+                    return
                 self.refine_and_decimate()
 
             callbacks.append(

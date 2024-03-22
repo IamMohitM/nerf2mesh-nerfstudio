@@ -22,3 +22,4 @@ include = ["nerf2mesh*"]
 # register the entry point of your new method here:
 [project.entry-points.'nerfstudio.method_configs']
 nerf2mesh = 'nerf2mesh.config:nerf2mesh'
+# nerf2mesh-dataparser = 'nerf2mesh.config.Nerf2MeshDataParser'

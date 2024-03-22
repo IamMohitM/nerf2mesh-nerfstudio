@@ -12,3 +12,4 @@ temp/
 
 *.so
 meshes/
+.vscode/nerf2mesh-nerfstudio.code-workspace

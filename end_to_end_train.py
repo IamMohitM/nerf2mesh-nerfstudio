@@ -7,9 +7,8 @@ def nerf_train(data, output_dir, bound, scale=0.33):
     config.set_timestamp()
     
     config.pipeline.datamanager.data = pathlib.Path(data)
-    config.max_num_iterations=5000
+    config.max_num_iterations=10000
     config.mixed_precision = True
-    config.pipeline.model.mark_unseen_triangles = True
     config.output_dir = output_dir
     config.viewer.quit_on_train_completion = True
     config.pipeline.model.bound = bound
@@ -25,7 +24,7 @@ def nerf_train(data, output_dir, bound, scale=0.33):
 
     config.stage = 1
     config.mixed_precision = False
-    config.max_num_iterations=5000
+    config.max_num_iterations=10000
     config.load_dir = checkpoint_dir
     config.pipeline.model.fine_mesh_path = config.pipeline.model.coarse_mesh_path.parent
     
