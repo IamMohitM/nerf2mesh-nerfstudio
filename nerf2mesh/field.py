@@ -250,8 +250,8 @@ class Nerf2MeshFieldStage1(Field):
             torch.zeros_like(self.vertices, dtype=torch.float32)
         ).to(self.device)
 
-        self.triangle_errors = torch.nn.Parameter(
-            torch.zeros_like(self.triangles[:, 0], dtype=torch.float32)
+        self.triangle_errors = torch.zeros_like(
+            self.triangles[:, 0], dtype=torch.float32
         ).to(self.device)
         self.triangle_errors_cnt = torch.zeros_like(
             self.triangles[:, 0], dtype=torch.float32
